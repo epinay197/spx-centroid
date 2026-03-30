@@ -348,11 +348,10 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
         <div class="cmeta" id="chartMeta">0DTE pure volume-weighted centroids + linear regression to close</div>
       </div>
       <div class="legend">
-        <div class="leg"><div class="ll" style="background:var(--call)"></div><span style="color:var(--call)">Call Cent</span></div>
-        <div class="leg"><div class="ll" style="background:var(--put)"></div><span style="color:var(--put)">Put Cent</span></div>
-        <div class="leg"><div class="ll" style="background:var(--call);opacity:.4"></div><span style="color:var(--call);opacity:.7">Call Reg</span></div>
-        <div class="leg"><div class="ll" style="background:var(--put);opacity:.4"></div><span style="color:var(--put);opacity:.7">Put Reg</span></div>
-        <div class="leg"><div class="ll" style="background:var(--spot)"></div><span style="color:var(--spot)">SPX</span></div>
+        <div class="leg"><div class="ll" style="background:var(--call)"></div><span style="color:var(--call)">Call Centroid</span></div>
+        <div class="leg"><div class="ll" style="background:var(--put)"></div><span style="color:var(--put)">Put Centroid</span></div>
+        <div class="leg"><div class="ld" style="border-color:rgba(0,255,136,.6)"></div><span style="color:var(--call);opacity:.7">Call Trend</span></div>
+        <div class="leg"><div class="ld" style="border-color:rgba(255,51,85,.6)"></div><span style="color:var(--put);opacity:.7">Put Trend</span></div>
       </div>
     </div>
     <div class="canvas-wrap"><canvas id="centChart"></canvas></div>
@@ -403,7 +402,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 </div>
 
 <script>
-const API = 'http://localhost:8765';
+const API = '';
 let centChart, distChart, countdown=15, cdTimer=null, pollTimer=null, prevDayChar='';
 let lastErrTs=0;
 
@@ -447,19 +446,16 @@ function setSessionUI(cls,label){
   b.className='session-badge '+cls; d.className='dot '+cls; t.textContent=label;
 }
 function updateClosedOverlay(d){
-  const o=document.getElementById('closedOverlay'),sl=d.session_label||'';
+  // Never block the dashboard with a full-screen overlay — show status in session badge
+  document.getElementById('closedOverlay').classList.add('hidden');
+  const sl=d.session_label||'';
   if(d.status==='closed'){
-    o.classList.remove('hidden');
-    const el=document.getElementById('coSession');
-    el.className='co-session '+(sl==='PRE-MARKET'?'pre':'');
-    el.textContent=sl||'MARKET CLOSED';
     const s=d.secs_until_open||0;
-    if(s>0){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60;
-      document.getElementById('coCountdown').textContent=`Opens in ${h>0?h+'h ':''}${String(m).padStart(2,'0')}m ${String(sc).padStart(2,'0')}s`;}
-    else document.getElementById('coCountdown').textContent='';
-    setSessionUI(sl==='PRE-MARKET'?'pre':'closed',sl||'CLOSED');
+    let label=sl||'CLOSED';
+    if(s>0){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);
+      label+=` | ${h>0?h+'h ':''}${String(m).padStart(2,'0')}m`;}
+    setSessionUI(sl==='PRE-MARKET'?'pre':'closed', label);
   } else {
-    o.classList.add('hidden');
     const isPost=d.post_london;
     setSessionUI(isPost?'live':'prelondon', isPost?'LIVE':'PRE-LONDON');
   }
@@ -472,7 +468,7 @@ async function poll(){
     const d=await r.json();
     lastErrTs=0;
     updateClosedOverlay(d);
-    if(d.status==='live') renderData(d);
+    if(d.call_centroid!=null||d.status==='live') renderData(d);
   }catch(e){
     const now=Date.now();
     if(now-lastErrTs>60000){addTape('ERR','Server connection lost','warn');lastErrTs=now;}
@@ -491,6 +487,22 @@ const f0=n=>n==null?'--':Math.round(n).toLocaleString('en-US');
 const fK=n=>n>=1000?(n/1000).toFixed(1)+'K':String(n);
 const sign=n=>n>=0?'+':''
 function setEl(id,v){const e=document.getElementById(id);if(e)e.textContent=v;}
+
+// ── Regression helper ─────────────────────────────────────────
+// Compute OLS linear regression line for each tick in history.
+// Returns an array of the same length with the fitted Y value at each index.
+function computeRegLine(hist, key){
+  const pts=[];
+  hist.forEach((h,i)=>{if(h[key]!=null)pts.push({i,v:h[key]});});
+  if(pts.length<4) return hist.map(()=>null);
+  const n=pts.length;
+  const xm=pts.reduce((s,p)=>s+p.i,0)/n;
+  const ym=pts.reduce((s,p)=>s+p.v,0)/n;
+  let sx=0,sxy=0;
+  pts.forEach(p=>{sx+=(p.i-xm)**2; sxy+=(p.i-xm)*(p.v-ym);});
+  const slope=sx>0?sxy/sx:0, b=ym-slope*xm;
+  return hist.map((_,i)=>+(slope*i+b).toFixed(2));
+}
 
 // ── Main render ───────────────────────────────────────────────
 function renderData(d){
@@ -624,21 +636,18 @@ function renderData(d){
     centChart.data.labels=hist.map(h=>h.t);
     centChart.data.datasets[0].data=hist.map(h=>h.call_c);
     centChart.data.datasets[1].data=hist.map(h=>h.put_c);
-    centChart.data.datasets[2].data=hist.map(h=>h.spot);
-    // Regression overlay: extend last known regression to close as dashed
-    // Just show the raw history + a single projection point at end
-    const len=hist.length;
-    if(cproj&&len>4){
-      const regCall=hist.map((_,i)=>null);
-      regCall[0]=hist[0].call_c;
-      regCall[len-1]=hist[len-1].call_c;
-      centChart.data.datasets[3].data=regCall;
+    // Proper OLS regression trend lines — slope matches the actual centroid trajectory
+    if(hist.length>=4){
+      centChart.data.datasets[2].data=computeRegLine(hist,'call_c');
+      centChart.data.datasets[3].data=computeRegLine(hist,'put_c');
     }
-    if(pproj&&len>4){
-      const regPut=hist.map((_,i)=>null);
-      regPut[0]=hist[0].put_c;
-      regPut[len-1]=hist[len-1].put_c;
-      centChart.data.datasets[4].data=regPut;
+    // Tighten Y-axis to data range so lines fill the chart (not compressed into top/bottom)
+    const allVals=[...hist.map(h=>h.call_c),...hist.map(h=>h.put_c)].filter(v=>v!=null);
+    if(allVals.length>0){
+      const mn=Math.min(...allVals), mx=Math.max(...allVals);
+      const pad=(mx-mn)*0.10;
+      centChart.options.scales.y.min=mn-pad;
+      centChart.options.scales.y.max=mx+pad;
     }
     centChart.update('active');
   }
@@ -737,11 +746,14 @@ function initCharts(){
   centChart=new Chart(document.getElementById('centChart'),{
     type:'line',
     data:{labels:[],datasets:[
-      {label:'Call Centroid',data:[],borderColor:'#00ff88',borderWidth:2.5,pointRadius:0,tension:.25,fill:false},
-      {label:'Put Centroid', data:[],borderColor:'#ff3355',borderWidth:2.5,pointRadius:0,tension:.25,fill:false},
-      {label:'SPX',          data:[],borderColor:'#cc55ff',borderWidth:1.5,pointRadius:0,tension:.2, fill:false},
-      {label:'Call Regress', data:[],borderColor:'rgba(0,255,136,.4)',borderWidth:1,borderDash:[6,4],pointRadius:0,tension:0,fill:false},
-      {label:'Put Regress',  data:[],borderColor:'rgba(255,51,85,.4)', borderWidth:1,borderDash:[6,4],pointRadius:0,tension:0,fill:false},
+      // Dataset 0: Call Centroid — primary signal line
+      {label:'Call Centroid',data:[],borderColor:'#00ff88',borderWidth:2.5,pointRadius:0,tension:.3,fill:false},
+      // Dataset 1: Put Centroid — primary signal line
+      {label:'Put Centroid', data:[],borderColor:'#ff3355',borderWidth:2.5,pointRadius:0,tension:.3,fill:false},
+      // Dataset 2: Call OLS trend — shows slope direction clearly
+      {label:'Call Trend',   data:[],borderColor:'rgba(0,255,136,.4)',borderWidth:1.2,borderDash:[5,4],pointRadius:0,tension:0,fill:false,spanGaps:true},
+      // Dataset 3: Put OLS trend — shows slope direction clearly
+      {label:'Put Trend',    data:[],borderColor:'rgba(255,51,85,.4)', borderWidth:1.2,borderDash:[5,4],pointRadius:0,tension:0,fill:false,spanGaps:true},
     ]},
     options:{
       responsive:true,maintainAspectRatio:false,animation:{duration:300},
