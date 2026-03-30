@@ -348,11 +348,10 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
         <div class="cmeta" id="chartMeta">0DTE pure volume-weighted centroids + linear regression to close</div>
       </div>
       <div class="legend">
-        <div class="leg"><div class="ll" style="background:var(--call)"></div><span style="color:var(--call)">Call Centroid</span></div>
-        <div class="leg"><div class="ll" style="background:var(--put)"></div><span style="color:var(--put)">Put Centroid</span></div>
-        <div class="leg"><div class="ld" style="border-color:rgba(0,255,136,.6)"></div><span style="color:var(--call);opacity:.7">Call Trend</span></div>
-        <div class="leg"><div class="ld" style="border-color:rgba(255,51,85,.6)"></div><span style="color:var(--put);opacity:.7">Put Trend</span></div>
-        <div class="leg"><div class="ll" style="background:rgba(204,85,255,.55)"></div><span style="color:var(--spot);opacity:.8">SPX</span></div>
+        <div class="leg"><div class="ld" style="border-color:#d4a800;border-top-width:2px"></div><span style="color:#d4a800">Call Centroid</span></div>
+        <div class="leg"><div class="ld" style="border-color:#d4a800;border-top-width:2px"></div><span style="color:#d4a800">Put Centroid</span></div>
+        <div class="leg"><div class="ld" style="border-color:rgba(212,168,0,.5)"></div><span style="color:rgba(212,168,0,.6)">Trend</span></div>
+        <div class="leg"><div class="ld" style="border-color:rgba(160,100,255,.5)"></div><span style="color:rgba(160,100,255,.7)">SPX</span></div>
       </div>
     </div>
     <div class="canvas-wrap"><canvas id="centChart"></canvas></div>
@@ -752,19 +751,25 @@ function initCharts(){
     titleColor:'#00ccff',titleFont:{size:9},bodyFont:{size:9},bodyColor:'#b8ddf8',
     callbacks:{label:ctx=>` ${ctx.dataset.label}: ${ctx.parsed.y?Math.round(ctx.parsed.y).toLocaleString():'--'}`}};
 
+  // GammaEdge gold palette — matches VoIM Engine methodology diagram
+  const GOLD      = '#d4a800';
+  const GOLD_DIM  = 'rgba(212,168,0,.45)';
+  const GOLD_DOT  = 'rgba(212,168,0,.28)';
+  const SPX_COLOR = 'rgba(160,100,255,.5)';
+
   centChart=new Chart(document.getElementById('centChart'),{
     type:'line',
     data:{labels:[],datasets:[
-      // Dataset 0: Call Centroid — primary signal line
-      {label:'Call Centroid',data:[],borderColor:'#00ff88',borderWidth:2.5,pointRadius:0,tension:.3,fill:false,yAxisID:'y'},
-      // Dataset 1: Put Centroid — primary signal line
-      {label:'Put Centroid', data:[],borderColor:'#ff3355',borderWidth:2.5,pointRadius:0,tension:.3,fill:false,yAxisID:'y'},
-      // Dataset 2: Call OLS trend — shows slope direction clearly
-      {label:'Call Trend',   data:[],borderColor:'rgba(0,255,136,.4)',borderWidth:1.2,borderDash:[5,4],pointRadius:0,tension:0,fill:false,spanGaps:true,yAxisID:'y'},
-      // Dataset 3: Put OLS trend — shows slope direction clearly
-      {label:'Put Trend',    data:[],borderColor:'rgba(255,51,85,.4)', borderWidth:1.2,borderDash:[5,4],pointRadius:0,tension:0,fill:false,spanGaps:true,yAxisID:'y'},
-      // Dataset 4: SPX price — secondary axis so it never compresses centroid scale
-      {label:'SPX',          data:[],borderColor:'rgba(204,85,255,.55)',borderWidth:1.2,pointRadius:0,tension:.2,fill:false,yAxisID:'y2'},
+      // Dataset 0: Call Centroid — thick dashed gold (top chopstick)
+      {label:'Call Centroid',data:[],borderColor:GOLD,     borderWidth:2.5,borderDash:[9,5],pointRadius:0,tension:.3,fill:false,yAxisID:'y'},
+      // Dataset 1: Put Centroid  — thick dashed gold (bottom chopstick)
+      {label:'Put Centroid', data:[],borderColor:GOLD,     borderWidth:2.5,borderDash:[9,5],pointRadius:0,tension:.3,fill:false,yAxisID:'y'},
+      // Dataset 2: Call OLS trend — thin dotted, shows slope trajectory
+      {label:'Call Trend',   data:[],borderColor:GOLD_DIM, borderWidth:1,  borderDash:[3,5],pointRadius:0,tension:0, fill:false,spanGaps:true,yAxisID:'y'},
+      // Dataset 3: Put OLS trend  — thin dotted, shows slope trajectory
+      {label:'Put Trend',    data:[],borderColor:GOLD_DOT, borderWidth:1,  borderDash:[3,5],pointRadius:0,tension:0, fill:false,spanGaps:true,yAxisID:'y'},
+      // Dataset 4: SPX spot price — thin dotted purple, secondary axis
+      {label:'SPX',          data:[],borderColor:SPX_COLOR,borderWidth:1,  borderDash:[3,5],pointRadius:0,tension:.2,fill:false,yAxisID:'y2'},
     ]},
     options:{
       responsive:true,maintainAspectRatio:false,animation:{duration:300},
@@ -773,9 +778,9 @@ function initCharts(){
       scales:{
         x:{grid:{color:gc,drawTicks:false},ticks:{maxTicksLimit:10,color:'#2a5070'}},
         y:{position:'right',grid:{color:gc,drawTicks:false},
-           ticks:{color:'#3d6e8a',callback:v=>v.toLocaleString('en-US',{maximumFractionDigits:0})}},
+           ticks:{color:'rgba(212,168,0,.5)',callback:v=>v.toLocaleString('en-US',{maximumFractionDigits:0})}},
         y2:{position:'left',grid:{display:false},
-            ticks:{color:'rgba(204,85,255,.4)',callback:v=>v.toLocaleString('en-US',{maximumFractionDigits:0})}}
+            ticks:{color:'rgba(160,100,255,.35)',callback:v=>v.toLocaleString('en-US',{maximumFractionDigits:0})}}
       }
     }
   });
