@@ -79,17 +79,27 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .lsec{padding:8px 10px;border-bottom:1px solid var(--border)}
 .slbl{font-size:.44rem;color:var(--dim);letter-spacing:2px;text-transform:uppercase;margin-bottom:5px;font-family:'Share Tech Mono',monospace}
 
-/* DAY CHARACTER CARD - the main signal */
-.day-card{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:10px;transition:border-color .4s,background .4s;margin-bottom:0}
-.day-card.trend-up{border-color:rgba(0,255,136,.4);background:rgba(0,255,136,.04)}
-.day-card.trend-down{border-color:rgba(255,51,85,.4);background:rgba(255,51,85,.04)}
-.day-card.chop{border-color:rgba(255,204,0,.35);background:rgba(255,204,0,.04)}
-.day-card.expansion{border-color:rgba(255,136,0,.4);background:rgba(255,136,0,.04)}
-.day-card.settling{border-color:rgba(0,204,255,.35);background:rgba(0,204,255,.04)}
-.day-card.mixed{border-color:var(--border)}
-.day-char{font-family:'Orbitron',monospace;font-size:.85rem;font-weight:900;letter-spacing:1px;transition:color .4s}
-.day-char.trend-up{color:var(--call)}.day-char.trend-down{color:var(--put)}
-.day-char.chop{color:var(--gold)}.day-char.expansion{color:var(--warn)}.day-char.settling{color:var(--acc)}.day-char.mixed{color:var(--dimm)}
+/* SIGNAL CARD — exact GammaEdge VoIM methodology colors */
+.sig-card{background:#111927;border-left:4px solid #1a3050;border-radius:0 4px 4px 0;padding:14px 14px 14px 16px;transition:border-left-color .4s,background .4s;margin-bottom:0}
+.sig-card.bullish{border-left-color:#3fb950;background:rgba(63,185,80,.07)}
+.sig-card.bearish{border-left-color:#f85149;background:rgba(248,81,73,.07)}
+.sig-card.chop{border-left-color:#ffd740;background:rgba(255,215,64,.07)}
+.sig-card.expansion{border-left-color:#ff8800;background:rgba(255,136,0,.07)}
+.sig-card.settling{border-left-color:#00ccff;background:rgba(0,204,255,.07)}
+.sig-card.mixed{border-left-color:#1a3050}
+.sig-label{font-family:'Orbitron',monospace;font-size:1.15rem;font-weight:900;letter-spacing:3px;transition:color .4s;text-transform:uppercase}
+.sig-label.bullish{color:#3fb950}
+.sig-label.bearish{color:#f85149}
+.sig-label.chop{color:#ffd740}
+.sig-label.expansion{color:#ff8800}
+.sig-label.settling{color:#00ccff}
+.sig-label.mixed{color:#3d6e8a}
+.sig-sub{font-family:'Share Tech Mono',monospace;font-size:.5rem;letter-spacing:1px;margin-top:3px;opacity:.7;transition:color .4s}
+.sig-sub.bullish{color:#3fb950}.sig-sub.bearish{color:#f85149}.sig-sub.chop{color:#ffd740}
+.sig-sub.expansion{color:#ff8800}.sig-sub.settling{color:#00ccff}.sig-sub.mixed{color:#3d6e8a}
+.sig-conf{font-family:'Share Tech Mono',monospace;font-size:.5rem;color:#4a7a9b;margin-top:6px}
+.sig-desc{font-family:'Share Tech Mono',monospace;font-size:.48rem;color:#5a8aaa;margin-top:4px;line-height:1.55}
+/* legacy aliases kept so no JS breaks */
 .day-conf{font-family:'Share Tech Mono',monospace;font-size:.52rem;color:var(--dimm);margin-top:2px}
 .day-signal{font-size:.5rem;color:var(--dimm);margin-top:4px;line-height:1.4;font-family:'Share Tech Mono',monospace}
 
@@ -177,10 +187,12 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .alert-banner{position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:8888;display:flex;align-items:center;gap:9px;padding:6px 18px;border-radius:2px;border:1px solid;font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1.5px;pointer-events:none;animation:alert-in .3s ease,alert-out .4s ease 4.6s forwards}
 @keyframes alert-in{from{opacity:0;transform:translateX(-50%) translateY(-6px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 @keyframes alert-out{to{opacity:0}}
-.alert-banner.trend-up{border-color:var(--call);color:var(--call);background:rgba(3,10,18,.97)}
-.alert-banner.trend-down{border-color:var(--put);color:var(--put);background:rgba(3,10,18,.97)}
-.alert-banner.chop{border-color:var(--gold);color:var(--gold);background:rgba(3,10,18,.97)}
-.alert-banner.settling{border-color:var(--acc);color:var(--acc);background:rgba(3,10,18,.97)}
+.alert-banner.bullish{border-color:#3fb950;color:#3fb950;background:rgba(3,10,18,.97)}
+.alert-banner.bearish{border-color:#f85149;color:#f85149;background:rgba(3,10,18,.97)}
+.alert-banner.chop{border-color:#ffd740;color:#ffd740;background:rgba(3,10,18,.97)}
+.alert-banner.expansion{border-color:#ff8800;color:#ff8800;background:rgba(3,10,18,.97)}
+.alert-banner.settling{border-color:#00ccff;color:#00ccff;background:rgba(3,10,18,.97)}
+.alert-banner.mixed{border-color:#3d6e8a;color:#3d6e8a;background:rgba(3,10,18,.97)}
 .alert-pulse{width:7px;height:7px;border-radius:50%;background:currentColor;animation:apulse .7s infinite}
 @keyframes apulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(1.6)}}
 
@@ -248,11 +260,12 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 <div class="lpanel">
 
   <div class="lsec">
-    <div class="slbl">Day Character</div>
-    <div class="day-card" id="dayCard">
-      <div class="day-char mixed" id="dayChar">DEVELOPING</div>
-      <div class="day-conf" id="dayConf">Confidence: --</div>
-      <div class="day-signal" id="daySignal">Awaiting data...</div>
+    <div class="slbl">VoIM Signal</div>
+    <div class="sig-card mixed" id="dayCard">
+      <div class="sig-label mixed" id="dayChar">DEVELOPING</div>
+      <div class="sig-sub mixed" id="sigSub">Awaiting data...</div>
+      <div class="sig-conf" id="dayConf"></div>
+      <div class="sig-desc" id="daySignal"></div>
     </div>
   </div>
 
@@ -525,21 +538,33 @@ function renderData(d){
   setEl('h-settle', sr ? f0(sr.mid) : '--');
   setEl('h-vol',   fK(d.total_vol||0));
 
-  // Day character card
+  // Day character card — VoIM methodology labels
   const dc=d.day_char||'DEVELOPING';
-  const dcCls=dc.includes('TREND UP')?'trend-up':dc.includes('TREND DOWN')?'trend-down':
-    dc==='EXPANSION'?'expansion':dc==='CHOP'?'chop':dc==='SETTLING'?'settling':'mixed';
+  function sigInfo(dc){
+    if(dc.includes('TREND UP'))   return {label:'BULLISH', sub:'Calls UP · Puts UP', cls:'bullish'};
+    if(dc.includes('TREND DOWN')) return {label:'BEARISH', sub:'Calls DOWN · Puts DOWN', cls:'bearish'};
+    if(dc==='CHOP')      return {label:'CHOP', sub:'Calls DOWN · Puts UP', cls:'chop'};
+    if(dc==='EXPANSION') return {label:'EXPANSION', sub:'Calls UP · Puts DOWN', cls:'expansion'};
+    if(dc==='SETTLING')  return {label:'SETTLING', sub:'ROC → 0 · Trajectory locked', cls:'settling'};
+    return {label:dc||'DEVELOPING', sub:'', cls:'mixed'};
+  }
+  const si=sigInfo(dc);
   const dcEl=document.getElementById('dayCard');
-  if(dcEl)dcEl.className='day-card '+dcCls;
+  if(dcEl)dcEl.className='sig-card '+si.cls;
   const dcTxt=document.getElementById('dayChar');
-  if(dcTxt){dcTxt.textContent=dc;dcTxt.className='day-char '+dcCls;}
-  setEl('dayConf',`Confidence: ${d.day_conf||0}%`);
+  if(dcTxt){dcTxt.textContent=si.label;dcTxt.className='sig-label '+si.cls;}
+  const subEl=document.getElementById('sigSub');
+  if(subEl){subEl.textContent=si.sub;subEl.className='sig-sub '+si.cls;}
+  const conf=d.day_conf||0;
+  setEl('dayConf', conf>0 ? `Confidence: ${conf}%` : '');
   setEl('daySignal',d.day_signal||'');
+  const dcCls=si.cls; // keep for alert/tape use below
 
   // Fire alert on day char change
   if(dc!==prevDayChar && dc!=='DEVELOPING' && dc!=='UNKNOWN'){
-    fireAlert(dc, dcCls, d.day_signal||'');
-    addTape(d.et_time||'--', `DAY: ${dc} (${d.day_conf}%)`, dcCls.includes('down')?'dn':dcCls==='chop'||dcCls==='settling'?'neut':'up');
+    fireAlert(si.label, si.cls, d.day_signal||'');
+    const tapeCls=si.cls==='bullish'?'up':si.cls==='bearish'?'dn':'neut';
+    addTape(d.et_time||'--', `${si.label}: ${d.day_signal||''} (${d.day_conf}%)`, tapeCls);
     prevDayChar=dc;
   }
 
@@ -672,8 +697,8 @@ function renderData(d){
   // Tape regular update
   if(cc&&pc){
     const sp=cc-pc;
-    addTape(d.et_time||'--', `Call ${f0(cc)} | Put ${f0(pc)} | Spread ${sign(sp)}${f0(sp)} | ${dc}`,
-      dc.includes('UP')?'up':dc.includes('DOWN')?'dn':dc==='CHOP'?'neut':'acc');
+    addTape(d.et_time||'--', `Call ${f0(cc)} | Put ${f0(pc)} | Spread ${sign(sp)}${f0(sp)} | ${si.label}`,
+      si.cls==='bullish'?'up':si.cls==='bearish'?'dn':'acc');
   }
 }
 
