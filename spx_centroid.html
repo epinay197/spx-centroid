@@ -352,6 +352,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
         <div class="leg"><div class="ll" style="background:var(--put)"></div><span style="color:var(--put)">Put Centroid</span></div>
         <div class="leg"><div class="ld" style="border-color:rgba(0,255,136,.6)"></div><span style="color:var(--call);opacity:.7">Call Trend</span></div>
         <div class="leg"><div class="ld" style="border-color:rgba(255,51,85,.6)"></div><span style="color:var(--put);opacity:.7">Put Trend</span></div>
+        <div class="leg"><div class="ll" style="background:rgba(204,85,255,.55)"></div><span style="color:var(--spot);opacity:.8">SPX</span></div>
       </div>
     </div>
     <div class="canvas-wrap"><canvas id="centChart"></canvas></div>
@@ -641,13 +642,21 @@ function renderData(d){
       centChart.data.datasets[2].data=computeRegLine(hist,'call_c');
       centChart.data.datasets[3].data=computeRegLine(hist,'put_c');
     }
-    // Tighten Y-axis to data range so lines fill the chart (not compressed into top/bottom)
-    const allVals=[...hist.map(h=>h.call_c),...hist.map(h=>h.put_c)].filter(v=>v!=null);
-    if(allVals.length>0){
-      const mn=Math.min(...allVals), mx=Math.max(...allVals);
+    centChart.data.datasets[4].data=hist.map(h=>h.spot);
+    // Tighten centroid Y-axis (y) to centroid range; SPX uses its own axis (y2)
+    const centVals=[...hist.map(h=>h.call_c),...hist.map(h=>h.put_c)].filter(v=>v!=null);
+    if(centVals.length>0){
+      const mn=Math.min(...centVals), mx=Math.max(...centVals);
       const pad=(mx-mn)*0.10;
       centChart.options.scales.y.min=mn-pad;
       centChart.options.scales.y.max=mx+pad;
+    }
+    const spotVals=hist.map(h=>h.spot).filter(v=>v!=null);
+    if(spotVals.length>0){
+      const mn=Math.min(...spotVals), mx=Math.max(...spotVals);
+      const pad=Math.max((mx-mn)*0.10,5);
+      centChart.options.scales.y2.min=mn-pad;
+      centChart.options.scales.y2.max=mx+pad;
     }
     centChart.update('active');
   }
@@ -747,13 +756,15 @@ function initCharts(){
     type:'line',
     data:{labels:[],datasets:[
       // Dataset 0: Call Centroid — primary signal line
-      {label:'Call Centroid',data:[],borderColor:'#00ff88',borderWidth:2.5,pointRadius:0,tension:.3,fill:false},
+      {label:'Call Centroid',data:[],borderColor:'#00ff88',borderWidth:2.5,pointRadius:0,tension:.3,fill:false,yAxisID:'y'},
       // Dataset 1: Put Centroid — primary signal line
-      {label:'Put Centroid', data:[],borderColor:'#ff3355',borderWidth:2.5,pointRadius:0,tension:.3,fill:false},
+      {label:'Put Centroid', data:[],borderColor:'#ff3355',borderWidth:2.5,pointRadius:0,tension:.3,fill:false,yAxisID:'y'},
       // Dataset 2: Call OLS trend — shows slope direction clearly
-      {label:'Call Trend',   data:[],borderColor:'rgba(0,255,136,.4)',borderWidth:1.2,borderDash:[5,4],pointRadius:0,tension:0,fill:false,spanGaps:true},
+      {label:'Call Trend',   data:[],borderColor:'rgba(0,255,136,.4)',borderWidth:1.2,borderDash:[5,4],pointRadius:0,tension:0,fill:false,spanGaps:true,yAxisID:'y'},
       // Dataset 3: Put OLS trend — shows slope direction clearly
-      {label:'Put Trend',    data:[],borderColor:'rgba(255,51,85,.4)', borderWidth:1.2,borderDash:[5,4],pointRadius:0,tension:0,fill:false,spanGaps:true},
+      {label:'Put Trend',    data:[],borderColor:'rgba(255,51,85,.4)', borderWidth:1.2,borderDash:[5,4],pointRadius:0,tension:0,fill:false,spanGaps:true,yAxisID:'y'},
+      // Dataset 4: SPX price — secondary axis so it never compresses centroid scale
+      {label:'SPX',          data:[],borderColor:'rgba(204,85,255,.55)',borderWidth:1.2,pointRadius:0,tension:.2,fill:false,yAxisID:'y2'},
     ]},
     options:{
       responsive:true,maintainAspectRatio:false,animation:{duration:300},
@@ -762,7 +773,9 @@ function initCharts(){
       scales:{
         x:{grid:{color:gc,drawTicks:false},ticks:{maxTicksLimit:10,color:'#2a5070'}},
         y:{position:'right',grid:{color:gc,drawTicks:false},
-           ticks:{color:'#3d6e8a',callback:v=>v.toLocaleString('en-US',{maximumFractionDigits:0})}}
+           ticks:{color:'#3d6e8a',callback:v=>v.toLocaleString('en-US',{maximumFractionDigits:0})}},
+        y2:{position:'left',grid:{display:false},
+            ticks:{color:'rgba(204,85,255,.4)',callback:v=>v.toLocaleString('en-US',{maximumFractionDigits:0})}}
       }
     }
   });
