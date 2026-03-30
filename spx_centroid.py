@@ -264,40 +264,56 @@ def project_to_close(history, key, now_et):
 # ── DAY CHARACTER CLASSIFICATION ──────────────────────────────
 def classify_day(history):
     """
-    GammaEdge day character logic:
-    - BOTH centroids trending SAME direction -> TREND day
-    - Centroids trending OPPOSITE directions -> CHOP (range)
-    - One centroid changing direction -> REVERSAL potential
+    GammaEdge VoIM day character — exact methodology definitions:
+      TREND UP:    call centroid UP  + put centroid UP   (calls opening, puts closing)
+      TREND DOWN:  call centroid DOWN + put centroid DOWN (puts opening, calls closing)
+      EXPANSION:   call centroid UP  + put centroid DOWN  (wide range, early divergence)
+      CHOP:        call centroid DOWN + put centroid UP    (ONLY this combination)
+      SETTLING:    both ROC → 0 AND high R² confidence (trajectory locked)
     """
     if len(history) < 6:
         return "DEVELOPING", 0, "Need more data (min ~2 min)"
 
     call_vals = [h["call_c"] for h in history[-12:] if h.get("call_c")]
     put_vals  = [h["put_c"]  for h in history[-12:] if h.get("put_c")]
-    if len(call_vals)<4 or len(put_vals)<4:
+    if len(call_vals) < 6 or len(put_vals) < 6:
         return "DEVELOPING", 0, "Insufficient volume data"
 
     c_slope, _, c_r2 = linreg(call_vals)
     p_slope, _, p_r2 = linreg(put_vals)
 
-    # Slopes in same direction?
-    same_dir = (c_slope > 0 and p_slope > 0) or (c_slope < 0 and p_slope < 0)
-    c_strong = abs(c_slope) > 0.3 and c_r2 > 0.5
-    p_strong = abs(p_slope) > 0.3 and p_r2 > 0.5
+    # Require R² ≥ 0.65 for a slope to be considered meaningful
+    c_strong = abs(c_slope) > 0.3 and c_r2 > 0.65
+    p_strong = abs(p_slope) > 0.3 and p_r2 > 0.65
 
-    # Rate of change near zero -> settling
+    # SETTLING: ROC near zero AND high confidence (trajectory locked)
     near_zero = abs(c_slope) < 0.15 and abs(p_slope) < 0.15
-    conf = int(min((c_r2 + p_r2)/2 * 100, 99))
+    settled   = near_zero and c_r2 > 0.65 and p_r2 > 0.65
 
-    if near_zero:
-        return "SETTLING", conf, "Centroids stable - range/butterfly setup"
-    if same_dir and c_strong and p_strong:
+    conf = int(min((c_r2 + p_r2) / 2 * 100, 99))
+
+    if settled:
+        return "SETTLING", conf, "Centroids locked - range/butterfly setup"
+
+    # TREND: both centroids moving in same direction
+    if c_slope > 0 and p_slope > 0 and c_strong and p_strong:
+        return "TREND UP", conf, "Calls UP + Puts UP - calls opening, puts closing - bullish bias"
+    if c_slope < 0 and p_slope < 0 and c_strong and p_strong:
+        return "TREND DOWN", conf, "Calls DOWN + Puts DOWN - puts opening, calls closing - bearish bias"
+
+    # EXPANSION: calls UP + puts DOWN (early divergence, wide range expected)
+    if c_slope > 0 and p_slope < 0 and (c_strong or p_strong):
+        return "EXPANSION", conf, "Calls UP + Puts DOWN - wide range day developing, avoid tight stops"
+
+    # CHOP: SPECIFICALLY calls DOWN + puts UP (not any opposing slopes)
+    if c_slope < 0 and p_slope > 0 and (c_strong or p_strong):
+        return "CHOP", conf, "Calls DOWN + Puts UP - range-bound, avoid directional"
+
+    # Weak same-direction trend (below confidence threshold)
+    if (c_slope > 0 and p_slope > 0) or (c_slope < 0 and p_slope < 0):
         direction = "UP" if c_slope > 0 else "DOWN"
-        return f"TREND {direction}", conf, f"Both centroids trending {direction} - directional bias"
-    if not same_dir and (c_strong or p_strong):
-        return "CHOP", conf, "Centroids diverging - range-bound, avoid directional"
-    if same_dir:
-        return f"TREND {('UP' if c_slope>0 else 'DOWN')}", max(conf-20,10), "Weak trend - wait for confirmation"
+        return f"TREND {direction}", max(conf - 20, 10), "Weak trend - wait for R² confirmation"
+
     return "MIXED", 20, "No clear structure yet"
 
 # ── MAIN REFRESH ──────────────────────────────────────────────
@@ -322,12 +338,14 @@ def refresh_data():
             if h and h[-1].get("put_c") and c["put_c"]:
                 put_roc  = round(c["put_c"]  - h[-1]["put_c"], 2)
 
-            # 5-period smoothed RoC
+            # 5-period smoothed RoC (avg of call + put ROC over 5 ticks)
             roc5 = 0
-            if len(h)>=5:
-                c5  = [x["call_c"] for x in h[-5:] if x.get("call_c")]
-                p5  = [x["put_c"]  for x in h[-5:] if x.get("put_c")]
-                if len(c5)>=2: roc5 = round((c5[-1]-c5[0])/len(c5),2)
+            if len(h) >= 5:
+                c5 = [x["call_c"] for x in h[-5:] if x.get("call_c")]
+                p5 = [x["put_c"]  for x in h[-5:] if x.get("put_c")]
+                c_roc5 = round((c5[-1] - c5[0]) / (len(c5) - 1), 2) if len(c5) >= 2 else 0
+                p_roc5 = round((p5[-1] - p5[0]) / (len(p5) - 1), 2) if len(p5) >= 2 else 0
+                roc5 = round((c_roc5 + p_roc5) / 2, 2)
 
             h.append({
                 "t": ts, "spot": round(spot,2),

@@ -84,11 +84,12 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .day-card.trend-up{border-color:rgba(0,255,136,.4);background:rgba(0,255,136,.04)}
 .day-card.trend-down{border-color:rgba(255,51,85,.4);background:rgba(255,51,85,.04)}
 .day-card.chop{border-color:rgba(255,204,0,.35);background:rgba(255,204,0,.04)}
+.day-card.expansion{border-color:rgba(255,136,0,.4);background:rgba(255,136,0,.04)}
 .day-card.settling{border-color:rgba(0,204,255,.35);background:rgba(0,204,255,.04)}
 .day-card.mixed{border-color:var(--border)}
 .day-char{font-family:'Orbitron',monospace;font-size:.85rem;font-weight:900;letter-spacing:1px;transition:color .4s}
 .day-char.trend-up{color:var(--call)}.day-char.trend-down{color:var(--put)}
-.day-char.chop{color:var(--gold)}.day-char.settling{color:var(--acc)}.day-char.mixed{color:var(--dimm)}
+.day-char.chop{color:var(--gold)}.day-char.expansion{color:var(--warn)}.day-char.settling{color:var(--acc)}.day-char.mixed{color:var(--dimm)}
 .day-conf{font-family:'Share Tech Mono',monospace;font-size:.52rem;color:var(--dimm);margin-top:2px}
 .day-signal{font-size:.5rem;color:var(--dimm);margin-top:4px;line-height:1.4;font-family:'Share Tech Mono',monospace}
 
@@ -527,7 +528,7 @@ function renderData(d){
   // Day character card
   const dc=d.day_char||'DEVELOPING';
   const dcCls=dc.includes('TREND UP')?'trend-up':dc.includes('TREND DOWN')?'trend-down':
-    dc==='CHOP'?'chop':dc==='SETTLING'?'settling':'mixed';
+    dc==='EXPANSION'?'expansion':dc==='CHOP'?'chop':dc==='SETTLING'?'settling':'mixed';
   const dcEl=document.getElementById('dayCard');
   if(dcEl)dcEl.className='day-card '+dcCls;
   const dcTxt=document.getElementById('dayChar');
@@ -699,8 +700,16 @@ function getTradeGuide(dc, postLondon, cSlope, pSlope, conf, sr, spot){
     lines.push('- Target put centroid + OI support');
     lines.push('- Avoid call spreads');
     if(sr) lines.push(`- Settle target: ${Math.round(sr.mid)}`);
+  } else if(dc==='EXPANSION'){
+    lines.push('<span style="color:var(--warn)">EXPANSION - WIDE RANGE</span>');
+    lines.push('- Calls UP + Puts DOWN = early divergence');
+    lines.push('- Expect larger range, avoid tight stops');
+    lines.push('- Straddles / strangles outperform');
+    if(sr) lines.push(`- Projected range: ${Math.round(sr.low)}-${Math.round(sr.high)}`);
+    lines.push('- Wait for centroid alignment before directional');
   } else if(dc==='CHOP'){
     lines.push('<span style="color:var(--gold)">CHOP DAY - RANGE</span>');
+    lines.push('- Calls DOWN + Puts UP = range-bound');
     lines.push('- Sell spreads both sides');
     lines.push('- Iron condors between centroids');
     lines.push('- Butterflies at midpoint');
