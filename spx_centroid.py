@@ -1,0 +1,920 @@
+#!/usr/bin/env python3
+"""
+GammaEdge SPX Centroid  v6  -  Tradier edition (Tastytrade + Massive fallback)
+CORRECT methodology matching GammaEdge VOLM:
+  - PURE 0DTE cumulative VOLUME weighted centroid (no OI blend)
+  - OI kept separately as structural context only
+  - Linear regression on each centroid -> settlement projection
+  - Day character: TREND / CHOP / REVERSAL
+  - Rate of change tracking (CenTab equivalent)
+  - Works best after 11:30am ET (London close)
+  - Fallback chain: Tradier -> Tastytrade -> Massive
+"""
+
+import requests, json, time, threading, webbrowser, math
+from http.server  import HTTPServer, BaseHTTPRequestHandler
+from datetime     import date, datetime, timedelta
+from pathlib      import Path
+
+try:
+    import websocket  # websocket-client library
+    HAS_WEBSOCKET = True
+except ImportError:
+    HAS_WEBSOCKET = False
+
+PORT      = 8765
+BASE_DIR  = Path(__file__).parent
+
+TRADIER_PROD    = "https://api.tradier.com/v1"
+TRADIER_SANDBOX = "https://sandbox.tradier.com/v1"
+MASSIVE_BASE    = "https://api.massive.com"
+TT_BASE_URL     = "https://api.tastytrade.com"
+DXFEED_WS_URL   = "wss://tasty-openapi-ws.dxfeed.com/realtime"
+
+# ── ET helpers (no tzdata needed) ────────────────────────────
+def _et_offset():
+    utc = datetime.utcnow()
+    y   = utc.year
+    mar1 = datetime(y, 3, 1)
+    dst_start = mar1 + timedelta(days=(6 - mar1.weekday()) % 7 + 7)
+    nov1 = datetime(y, 11, 1)
+    dst_end = nov1 + timedelta(days=(6 - nov1.weekday()) % 7)
+    return -4 if dst_start <= utc < dst_end else -5
+
+def _now_et():
+    return datetime.utcnow() + timedelta(hours=_et_offset())
+
+def et_str():
+    return _now_et().strftime("%H:%M:%S")
+
+SESSION_OPEN  = (9,  30)
+SESSION_CLOSE = (16, 15)
+LONDON_CLOSE  = (11, 30)   # signals more reliable after this
+
+def market_status():
+    now = _now_et()
+    wd  = now.weekday()
+    h, m, s = now.hour, now.minute, now.second
+    open_m  = SESSION_OPEN[0]*60  + SESSION_OPEN[1]
+    close_m = SESSION_CLOSE[0]*60 + SESSION_CLOSE[1]
+    cur_m   = h*60 + m
+    if wd >= 5:
+        days = 7 - wd
+        nxt  = (now + timedelta(days=days)).replace(hour=9,minute=30,second=0,microsecond=0)
+        return False, int((nxt-now).total_seconds()), "WEEKEND"
+    if cur_m < open_m:
+        return False, (open_m-cur_m)*60-s, "PRE-MARKET"
+    if cur_m >= close_m:
+        days = 3 if wd == 4 else 1
+        nxt  = (now + timedelta(days=days)).replace(hour=9,minute=30,second=0,microsecond=0)
+        return False, int((nxt-now).total_seconds()), "AFTER-HOURS"
+    secs_left = (close_m-cur_m)*60-s
+    post_london = cur_m >= LONDON_CLOSE[0]*60+LONDON_CLOSE[1]
+    return True, secs_left, "POST-LONDON" if post_london else "PRE-LONDON"
+
+# ── Credentials ───────────────────────────────────────────────
+def load_credentials():
+    global G_MASSIVE_KEY, G_USE_MASSIVE
+    global G_TT_CLIENT_ID, G_TT_CLIENT_SECRET, G_TT_REFRESH_TOKEN, G_USE_TASTYTRADE
+    env_file = BASE_DIR / "credentials.env"
+    creds = {}
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8-sig", errors="ignore").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                v = v.strip().strip('"').strip("'").strip()
+                if v: creds[k.strip()] = v
+    # Load Tastytrade credentials (second fallback)
+    tt_id     = creds.get("TASTYTRADE_CLIENT_ID", "")
+    tt_secret = creds.get("TASTYTRADE_CLIENT_SECRET", "")
+    tt_refresh = creds.get("TASTYTRADE_REFRESH_TOKEN", "")
+    if tt_id and tt_secret and tt_refresh:
+        G_TT_CLIENT_ID     = tt_id
+        G_TT_CLIENT_SECRET = tt_secret
+        G_TT_REFRESH_TOKEN = tt_refresh
+        G_USE_TASTYTRADE   = True
+        print("  Tastytrade credentials loaded (fallback ready)")
+    # Load Massive API key (third fallback)
+    massive_key = creds.get("MASSIVE_API_KEY", "")
+    if massive_key:
+        G_MASSIVE_KEY = massive_key
+        G_USE_MASSIVE = True
+        print("  Massive API key loaded (fallback ready)")
+    prod    = creds.get("TRADIER_TOKEN_PRODUCTION","")
+    sandbox = creds.get("TRADIER_TOKEN_SANDBOX","")
+    generic = creds.get("TRADIER_TOKEN","")
+    candidates = []
+    if prod:    candidates.append((prod,    TRADIER_PROD,    "Production (live)"))
+    if sandbox: candidates.append((sandbox, TRADIER_SANDBOX, "Sandbox (15-min delay)"))
+    if generic:
+        candidates.append((generic, TRADIER_PROD,    "Production (live)"))
+        candidates.append((generic, TRADIER_SANDBOX, "Sandbox (15-min delay)"))
+    if not candidates:
+        if G_USE_TASTYTRADE:
+            print("  No Tradier token -- will use Tastytrade as primary")
+            return None, None, "Tastytrade (fallback)"
+        if G_USE_MASSIVE:
+            print("  No Tradier token -- will use Massive API only")
+            return None, None, "Massive (fallback)"
+        print("  ERROR: No Tradier token in credentials.env")
+        input("Press Enter to exit..."); exit(1)
+    for token, base_url, label in candidates:
+        print(f"  Testing {label}...")
+        try:
+            r = requests.get(f"{base_url}/markets/quotes",
+                             params={"symbols":"SPX","greeks":"false"},
+                             headers={"Authorization":f"Bearer {token}","Accept":"application/json"},
+                             timeout=8)
+            if r.status_code == 200:
+                d = r.json().get("quotes",{})
+                if d and d != "null":
+                    print(f"  OK: {label}")
+                    return token, base_url, label
+            print(f"    HTTP {r.status_code}")
+        except Exception as e:
+            print(f"    {e}")
+    if G_USE_TASTYTRADE:
+        print("  Tradier failed -- will use Tastytrade as primary fallback")
+        return None, None, "Tastytrade (fallback)"
+    if G_USE_MASSIVE:
+        print("  Tradier failed -- will use Massive API as fallback")
+        return None, None, "Massive (fallback)"
+    print("  ERROR: No token worked.")
+    input("Press Enter to exit..."); exit(1)
+
+def ah(token):
+    return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+# ── Globals ───────────────────────────────────────────────────
+G_TOKEN    = None
+G_BASE_URL = None
+G_LABEL    = None
+G_TT_CLIENT_ID     = None   # Tastytrade OAuth client ID
+G_TT_CLIENT_SECRET = None   # Tastytrade OAuth client secret
+G_TT_REFRESH_TOKEN = None   # Tastytrade OAuth refresh token
+G_USE_TASTYTRADE   = False  # True when Tastytrade is available as fallback
+G_TT_ACCESS_TOKEN  = None   # Cached Tastytrade access token
+G_TT_TOKEN_EXPIRY  = 0.0    # Unix timestamp when access token expires
+G_TT_STREAMER_TOKEN = None  # Cached dxFeed streamer token
+G_TT_STREAMER_EXPIRY = 0.0  # Unix timestamp when streamer token expires
+G_MASSIVE_KEY = None   # Fallback: Massive.com API key
+G_USE_MASSIVE = False  # True when Massive is available as fallback
+
+CACHE = {
+    "status":"connecting","error":None,"spot":None,
+    "timestamp":None,"et_time":None,
+    # Core VOLM centroids (pure 0DTE volume)
+    "call_centroid":None,"put_centroid":None,
+    "call_vol":0,"put_vol":0,"total_vol":0,
+    # Structural OI levels (separate from centroids)
+    "max_call_oi":None,"max_put_oi":None,
+    "call_oi":0,"put_oi":0,"pcr_oi":None,
+    # Historical series for chart + regression
+    "history":[],        # [{t,spot,call_c,put_c,call_roc,put_roc}]
+    # Regression projections
+    "call_proj":None,"put_proj":None,"settlement_range":None,
+    # Day character
+    "day_char":"UNKNOWN","day_conf":0,"day_signal":"",
+    # Rate of change
+    "call_roc":0,"put_roc":0,"roc_5":0,
+    # Session
+    "market_open":False,"session_label":"","secs_until_open":0,
+    "post_london":False,"mins_to_close":0,
+    # Strike distribution for bar chart
+    "by_strike":[],
+    "expiration":None,
+}
+CACHE_LOCK = threading.Lock()
+
+# ── Spot ─────────────────────────────────────────────────────
+def get_spot():
+    r = requests.get(f"{G_BASE_URL}/markets/quotes",
+                     params={"symbols":"SPX","greeks":"false"},
+                     headers=ah(G_TOKEN), timeout=10)
+    if r.status_code == 200:
+        q = r.json().get("quotes",{}).get("quote",{})
+        for f in ["last","close","prevclose"]:
+            v = q.get(f)
+            if v and float(v) > 100: return float(v)
+        b, a = q.get("bid"), q.get("ask")
+        if b and a: return (float(b)+float(a))/2
+    raise RuntimeError(f"SPX spot failed: HTTP {r.status_code}")
+
+# ── 0DTE expiration ───────────────────────────────────────────
+def get_0dte_exp():
+    """Get today's SPX 0DTE expiration date."""
+    r = requests.get(f"{G_BASE_URL}/markets/options/expirations",
+                     params={"symbol":"SPX","includeAllRoots":"true","strikes":"false"},
+                     headers=ah(G_TOKEN), timeout=15)
+    r.raise_for_status()
+    data  = r.json().get("expirations",{})
+    dates = data.get("date") or data.get("expiration") or []
+    if isinstance(dates,str): dates=[dates]
+    td = date.today().isoformat()
+    # Prefer today; fall back to next expiry (Friday if no daily)
+    today_exps = [d for d in dates if d == td]
+    return today_exps[0] if today_exps else (sorted(dates)[0] if dates else td)
+
+# ── Chain - 0DTE volume only ─────────────────────────────────
+def get_chain_0dte(exp):
+    r = requests.get(f"{G_BASE_URL}/markets/options/chains",
+                     params={"symbol":"SPX","expiration":exp,"greeks":"false"},
+                     headers=ah(G_TOKEN), timeout=30)
+    if r.status_code != 200: return []
+    opts = r.json().get("options") or {}
+    if not opts or opts=="null": return []
+    items = opts.get("option",[])
+    if isinstance(items,dict): items=[items]
+    return items
+
+# ── Massive.com API (fallback) ───────────────────────────────
+def massive_headers():
+    return {"Authorization": f"Bearer {G_MASSIVE_KEY}", "Accept": "application/json"}
+
+def get_spot_massive():
+    """Fetch SPX spot price via Massive API."""
+    url = f"{MASSIVE_BASE}/v2/last/trade/SPX"
+    r = requests.get(url, headers=massive_headers(), timeout=10)
+    r.raise_for_status()
+    data = r.json()
+    # Massive returns results.p for price
+    results = data.get("results", {})
+    price = results.get("p")
+    if price and float(price) > 100:
+        return float(price)
+    raise RuntimeError(f"Massive spot failed: unexpected response {data}")
+
+def get_chain_massive(exp):
+    """Fetch 0DTE options chain from Massive API with pagination.
+    Returns list of dicts matching Tradier-style keys for calc_centroids().
+    """
+    url = f"{MASSIVE_BASE}/v3/snapshot/options/SPX"
+    params = {"expiration_date": exp, "limit": 250}
+    all_opts = []
+
+    while url:
+        r = requests.get(url, params=params, headers=massive_headers(), timeout=30)
+        if r.status_code != 200:
+            print(f"  [Massive] chain HTTP {r.status_code}")
+            break
+        data = r.json()
+        results = data.get("results", [])
+        for item in results:
+            details = item.get("details", {})
+            greeks  = item.get("greeks", {})
+            oi      = int(item.get("open_interest", 0) or 0)
+            iv      = item.get("implied_volatility", 0)
+            last_tr = item.get("last_trade", {})
+            und     = item.get("underlying_asset", {})
+            ctype   = str(details.get("contract_type", "")).lower()
+            strike  = float(details.get("strike_price", 0) or 0)
+            volume  = int(last_tr.get("size", 0) or 0) if last_tr else 0
+            # Build Tradier-compatible dict
+            opt = {
+                "strike":        strike,
+                "option_type":   ctype,
+                "volume":        volume,
+                "open_interest": oi,
+                "greeks": {
+                    "gamma": float(greeks.get("gamma", 0) or 0),
+                    "delta": float(greeks.get("delta", 0) or 0),
+                    "theta": float(greeks.get("theta", 0) or 0),
+                    "vega":  float(greeks.get("vega", 0) or 0),
+                },
+                "implied_volatility": float(iv or 0),
+                "last_price": float(last_tr.get("price", 0) or 0) if last_tr else 0,
+                "underlying_price": float(und.get("price", 0) or 0) if und else 0,
+            }
+            all_opts.append(opt)
+
+        # Handle pagination
+        next_url = data.get("next_url")
+        if next_url:
+            # next_url is a full URL; clear params so we don't double-add them
+            url = next_url
+            params = {}
+        else:
+            url = None
+
+    return all_opts
+
+# ── Tastytrade API (second fallback) ─────────────────────────
+def _tt_get_access_token():
+    """Get/refresh Tastytrade OAuth access token (15 min TTL)."""
+    global G_TT_ACCESS_TOKEN, G_TT_TOKEN_EXPIRY
+    now = time.time()
+    if G_TT_ACCESS_TOKEN and now < G_TT_TOKEN_EXPIRY - 60:
+        return G_TT_ACCESS_TOKEN
+    print("  [Tastytrade] Refreshing OAuth access token...")
+    resp = requests.post(
+        f"{TT_BASE_URL}/oauth/token",
+        data={
+            "grant_type":    "refresh_token",
+            "refresh_token": G_TT_REFRESH_TOKEN,
+            "client_id":     G_TT_CLIENT_ID,
+            "client_secret": G_TT_CLIENT_SECRET,
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    G_TT_ACCESS_TOKEN = payload["access_token"]
+    expires_in = int(payload.get("expires_in", 900))
+    G_TT_TOKEN_EXPIRY = now + expires_in
+    print(f"  [Tastytrade] Access token obtained (expires in {expires_in}s)")
+    return G_TT_ACCESS_TOKEN
+
+def _tt_get_streamer_token():
+    """Get/refresh dxFeed streamer token (20h TTL)."""
+    global G_TT_STREAMER_TOKEN, G_TT_STREAMER_EXPIRY
+    now = time.time()
+    if G_TT_STREAMER_TOKEN and now < G_TT_STREAMER_EXPIRY - 300:
+        return G_TT_STREAMER_TOKEN
+    print("  [Tastytrade] Fetching dxFeed streamer token...")
+    access_token = _tt_get_access_token()
+    resp = requests.get(
+        f"{TT_BASE_URL}/api-quote-tokens",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json().get("data", {})
+    G_TT_STREAMER_TOKEN = data.get("token") or data.get("dxlink-url", "")
+    if not G_TT_STREAMER_TOKEN:
+        raise RuntimeError(f"[Tastytrade] No streamer token in response")
+    G_TT_STREAMER_EXPIRY = now + 19.5 * 3600
+    print("  [Tastytrade] Streamer token obtained")
+    return G_TT_STREAMER_TOKEN
+
+def _tt_rest_get(path, params=None):
+    """Authenticated GET request to Tastytrade REST API."""
+    access_token = _tt_get_access_token()
+    resp = requests.get(
+        f"{TT_BASE_URL}{path}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        params=params or {},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+def _tt_parse_feed_data(feed_data, collected, lock):
+    """Parse dxFeed FEED_DATA payload (compact or dict format)."""
+    if not isinstance(feed_data, list):
+        return
+    i = 0
+    while i < len(feed_data):
+        item = feed_data[i]
+        if isinstance(item, dict):
+            sym = item.get("eventSymbol") or item.get("symbol", "")
+            if sym:
+                with lock:
+                    if sym not in collected:
+                        collected[sym] = {}
+                    collected[sym].update(item)
+            i += 1
+            continue
+        if isinstance(item, str) and i + 1 < len(feed_data):
+            headers = feed_data[i + 1]
+            if not isinstance(headers, list):
+                i += 1
+                continue
+            j = i + 2
+            while j < len(feed_data) and isinstance(feed_data[j], list):
+                row = feed_data[j]
+                row_dict = dict(zip(headers, row))
+                sym = row_dict.get("eventSymbol") or row_dict.get("symbol", "")
+                if sym:
+                    with lock:
+                        if sym not in collected:
+                            collected[sym] = {}
+                        collected[sym].update(row_dict)
+                j += 1
+            i = j
+            continue
+        i += 1
+
+def _tt_collect_dxfeed(symbols, event_types, timeout_sec=25.0):
+    """
+    Open a short-lived dxFeed WebSocket session, subscribe to event_types
+    for the given symbols, collect data, then disconnect.
+    Returns dict keyed by symbol -> dict of field values.
+    """
+    if not HAS_WEBSOCKET:
+        raise RuntimeError("websocket-client library not installed")
+
+    streamer_token = _tt_get_streamer_token()
+    collected = {}
+    collect_lock = threading.Lock()
+    done_event = threading.Event()
+
+    def _on_open(ws):
+        ws.send(json.dumps({"type": "SETUP", "channel": 0,
+                            "version": "0.1", "minVersion": "0.1"}))
+
+    def _on_message(ws, raw):
+        try:
+            msg = json.loads(raw)
+        except Exception:
+            return
+        msg_type = msg.get("type", "")
+        if msg_type == "SETUP":
+            ws.send(json.dumps({"type": "AUTH", "channel": 0,
+                                "token": streamer_token}))
+        elif msg_type == "AUTH_STATE":
+            if msg.get("state") == "AUTHORIZED":
+                ws.send(json.dumps({"type": "CHANNEL_REQUEST", "channel": 1,
+                                    "service": "FEED",
+                                    "parameters": {"contract": "AUTO"}}))
+            else:
+                ws.close()
+        elif msg_type == "CHANNEL_OPENED" and msg.get("channel") == 1:
+            subs = [{"type": ev, "symbol": sym}
+                    for sym in symbols for ev in event_types]
+            ws.send(json.dumps({"type": "FEED_SUBSCRIPTION", "channel": 1,
+                                "reset": True, "add": subs}))
+        elif msg_type == "FEED_DATA":
+            _tt_parse_feed_data(msg.get("data", []), collected, collect_lock)
+            with collect_lock:
+                if set(collected.keys()).issuperset(set(symbols)):
+                    done_event.set()
+
+    def _on_error(ws, error):
+        print(f"  [Tastytrade] dxFeed WS error: {error}")
+
+    def _on_close(ws, code, msg):
+        done_event.set()
+
+    ws_app = websocket.WebSocketApp(
+        DXFEED_WS_URL,
+        on_open=_on_open, on_message=_on_message,
+        on_error=_on_error, on_close=_on_close,
+    )
+    t = threading.Thread(target=ws_app.run_forever,
+                         kwargs={"ping_interval": 10, "ping_timeout": 5},
+                         daemon=True)
+    t.start()
+    done_event.wait(timeout=timeout_sec)
+    ws_app.close()
+    t.join(timeout=3)
+    return collected
+
+def _tt_build_dxfeed_symbols(expiration):
+    """
+    Build dxFeed symbol map for SPX options on the given expiration.
+    Returns dict of dxfeed_symbol -> {strike, option_type, expiration}.
+    """
+    exp_date = date.fromisoformat(expiration)
+    ymd = exp_date.strftime("%y%m%d")
+    try:
+        data = _tt_rest_get("/instruments/equity-options", params={
+            "symbol[]": "SPX", "expiration-date": expiration, "active": "true",
+        })
+        items = data.get("data", {}).get("items", [])
+    except Exception as e:
+        print(f"  [Tastytrade] Could not fetch strikes: {e}")
+        return {}
+
+    sym_map = {}
+    for item in items:
+        strike_raw = item.get("strike-price")
+        option_type = str(item.get("option-type", "")).upper()
+        if strike_raw is None:
+            continue
+        try:
+            strike = float(strike_raw)
+        except (TypeError, ValueError):
+            continue
+        if option_type in ("CALL", "C"):
+            type_char = "C"
+        elif option_type in ("PUT", "P"):
+            type_char = "P"
+        else:
+            continue
+        strike_str = str(int(strike)) if strike == int(strike) else str(strike)
+        for root in ("SPXW", "SPX"):
+            dxfeed_sym = f".{root}{ymd}{type_char}{strike_str}"
+            sym_map[dxfeed_sym] = {
+                "strike": strike,
+                "option_type": type_char,
+                "expiration": expiration,
+            }
+    return sym_map
+
+def get_spot_tastytrade():
+    """Fetch SPX spot price via Tastytrade dxFeed WebSocket."""
+    data = _tt_collect_dxfeed(
+        symbols=["SPX"],
+        event_types=["Trade", "Quote"],
+        timeout_sec=15.0,
+    )
+    spx = data.get("SPX", {})
+    price = spx.get("price") or spx.get("lastPrice") or spx.get("last")
+    if price is None:
+        bid = float(spx.get("bidPrice", 0) or 0)
+        ask = float(spx.get("askPrice", 0) or 0)
+        price = (bid + ask) / 2 if (bid + ask) > 0 else None
+    if price and float(price) > 100:
+        return float(price)
+    raise RuntimeError(f"[Tastytrade] SPX spot failed: {spx}")
+
+def get_0dte_exp_tastytrade():
+    """Get today's 0DTE expiration via Tastytrade REST API."""
+    try:
+        data = _tt_rest_get("/instruments/equity-options", params={
+            "symbol[]": "SPX", "active": "true",
+        })
+        items = data.get("data", {}).get("items", [])
+        exps = set()
+        for item in items:
+            exp = item.get("expiration-date")
+            if exp:
+                exps.add(exp)
+        sorted_exps = sorted(exps)
+        td = date.today().isoformat()
+        today_exps = [d for d in sorted_exps if d == td]
+        return today_exps[0] if today_exps else (sorted_exps[0] if sorted_exps else td)
+    except Exception as e:
+        print(f"  [Tastytrade] get_0dte_exp failed: {e}")
+        return date.today().isoformat()
+
+def get_chain_tastytrade(exp):
+    """
+    Fetch 0DTE options chain from Tastytrade via dxFeed WebSocket.
+    Returns list of dicts matching Tradier-style keys for calc_centroids().
+    """
+    sym_map = _tt_build_dxfeed_symbols(exp)
+    if not sym_map:
+        print("  [Tastytrade] No option symbols found")
+        return []
+
+    dxfeed_syms = list(sym_map.keys())
+    print(f"  [Tastytrade] Subscribing to {len(dxfeed_syms)} dxFeed symbols...")
+
+    # Batch in chunks to avoid overloading the WS
+    CHUNK = 200
+    all_data = {}
+    for start in range(0, len(dxfeed_syms), CHUNK):
+        chunk = dxfeed_syms[start:start + CHUNK]
+        chunk_data = _tt_collect_dxfeed(
+            symbols=chunk,
+            event_types=["Greeks", "Summary", "Trade", "Quote"],
+            timeout_sec=25.0,
+        )
+        all_data.update(chunk_data)
+
+    options = []
+    for dxfeed_sym, meta in sym_map.items():
+        ev = all_data.get(dxfeed_sym, {})
+        if not ev:
+            continue
+        strike = meta["strike"]
+        option_type = "call" if meta["option_type"] == "C" else "put"
+        volume = int(ev.get("dayVolume") or ev.get("volume") or 0)
+        oi     = int(ev.get("openInterest") or 0)
+        delta  = float(ev.get("delta") or 0.0)
+        gamma  = float(ev.get("gamma") or 0.0)
+        theta  = float(ev.get("theta") or 0.0)
+        vega   = float(ev.get("vega") or 0.0)
+        iv     = float(ev.get("volatility") or ev.get("impliedVolatility") or 0.0)
+        last   = float(ev.get("price") or ev.get("lastPrice") or ev.get("last") or 0.0)
+
+        opt = {
+            "strike":        strike,
+            "option_type":   option_type,
+            "volume":        volume,
+            "open_interest": oi,
+            "greeks": {
+                "gamma": gamma,
+                "delta": delta,
+                "theta": theta,
+                "vega":  vega,
+            },
+            "implied_volatility": iv,
+            "last_price": last,
+        }
+        options.append(opt)
+
+    print(f"  [Tastytrade] Got {len(options)} contracts with data")
+    return options
+
+# ── CORE CENTROID ENGINE ──────────────────────────────────────
+# GammaEdge VOLM = pure volume-weighted average strike
+# No OI blending. Separate OI tracking for structural levels only.
+def calc_centroids(opts, spot, strike_range=200):
+    lo, hi = spot - strike_range, spot + strike_range
+    cVw=cV=pVw=pV = 0
+    cOIw=cOI=pOIw=pOI = 0
+    by_strike = {}
+
+    for o in opts:
+        k   = float(o.get("strike",0))
+        vol = int(o.get("volume",0) or 0)
+        oi  = int(o.get("open_interest",0) or 0)
+        t   = str(o.get("option_type","")).lower()
+        if k < lo or k > hi: continue
+        if k not in by_strike:
+            by_strike[k]={"strike":k,"cVol":0,"pVol":0,"cOI":0,"pOI":0}
+        if t == "call":
+            if vol>0: cVw+=k*vol; cV+=vol; by_strike[k]["cVol"]+=vol
+            if oi >0: cOIw+=k*oi;  cOI+=oi;  by_strike[k]["cOI"] +=oi
+        elif t == "put":
+            if vol>0: pVw+=k*vol; pV+=vol; by_strike[k]["pVol"]+=vol
+            if oi >0: pOIw+=k*oi;  pOI+=oi;  by_strike[k]["pOI"] +=oi
+
+    # VOLM centroids = pure volume weighted average (GammaEdge methodology)
+    call_c = cVw/cV if cV>0 else None
+    put_c  = pVw/pV if pV>0 else None
+
+    # OI structural levels (separate - not blended)
+    sl = sorted(by_strike.values(), key=lambda x: x["strike"])
+    def best_oi(key): return max(sl, key=lambda x:x[key], default=None)
+    mc_oi = best_oi("cOI"); mp_oi = best_oi("pOI")
+
+    return {
+        "call_c": round(call_c,2) if call_c else None,
+        "put_c":  round(put_c,2)  if put_c  else None,
+        "call_vol": cV, "put_vol": pV, "total_vol": cV+pV,
+        "call_oi":  cOI,"put_oi":  pOI,
+        "max_call_oi": mc_oi["strike"] if mc_oi else None,
+        "max_put_oi":  mp_oi["strike"] if mp_oi else None,
+        "by_strike": sl,
+    }
+
+# ── LINEAR REGRESSION ─────────────────────────────────────────
+def linreg(series):
+    """Returns (slope, intercept, r2) for a series of y values."""
+    n = len(series)
+    if n < 3: return 0, (series[-1] if series else 0), 0
+    x_mean = (n-1)/2
+    y_mean = sum(series)/n
+    sx = sum((i-x_mean)**2 for i in range(n))
+    sxy= sum((i-x_mean)*(y-y_mean) for i,y in enumerate(series))
+    slope = sxy/sx if sx else 0
+    intercept = y_mean - slope*x_mean
+    # R-squared
+    ss_res = sum((series[i]-(slope*i+intercept))**2 for i in range(n))
+    ss_tot = sum((y-y_mean)**2 for y in series)
+    r2 = 1 - ss_res/ss_tot if ss_tot>0 else 0
+    return slope, intercept, r2
+
+def project_to_close(history, key, now_et):
+    """Project centroid value at 16:15 ET using linear regression."""
+    vals = [h[key] for h in history if h.get(key) is not None]
+    if len(vals) < 4: return None
+    slope, intercept, r2 = linreg(vals)
+    # How many more 15s ticks until close?
+    close_m = 16*60+15
+    cur_m   = now_et.hour*60+now_et.minute
+    ticks_left = (close_m - cur_m)*4   # 4 ticks per minute at 15s refresh
+    proj = intercept + slope*(len(vals)-1+ticks_left)
+    return round(proj, 2)
+
+# ── DAY CHARACTER CLASSIFICATION ──────────────────────────────
+def classify_day(history):
+    """
+    GammaEdge day character logic:
+    - BOTH centroids trending SAME direction -> TREND day
+    - Centroids trending OPPOSITE directions -> CHOP (range)
+    - One centroid changing direction -> REVERSAL potential
+    """
+    if len(history) < 6:
+        return "DEVELOPING", 0, "Need more data (min ~2 min)"
+
+    call_vals = [h["call_c"] for h in history[-12:] if h.get("call_c")]
+    put_vals  = [h["put_c"]  for h in history[-12:] if h.get("put_c")]
+    if len(call_vals)<4 or len(put_vals)<4:
+        return "DEVELOPING", 0, "Insufficient volume data"
+
+    c_slope, _, c_r2 = linreg(call_vals)
+    p_slope, _, p_r2 = linreg(put_vals)
+
+    # Slopes in same direction?
+    same_dir = (c_slope > 0 and p_slope > 0) or (c_slope < 0 and p_slope < 0)
+    c_strong = abs(c_slope) > 0.3 and c_r2 > 0.5
+    p_strong = abs(p_slope) > 0.3 and p_r2 > 0.5
+
+    # Rate of change near zero -> settling
+    near_zero = abs(c_slope) < 0.15 and abs(p_slope) < 0.15
+    conf = int(min((c_r2 + p_r2)/2 * 100, 99))
+
+    if near_zero:
+        return "SETTLING", conf, "Centroids stable - range/butterfly setup"
+    if same_dir and c_strong and p_strong:
+        direction = "UP" if c_slope > 0 else "DOWN"
+        return f"TREND {direction}", conf, f"Both centroids trending {direction} - directional bias"
+    if not same_dir and (c_strong or p_strong):
+        return "CHOP", conf, "Centroids diverging - range-bound, avoid directional"
+    if same_dir:
+        return f"TREND {('UP' if c_slope>0 else 'DOWN')}", max(conf-20,10), "Weak trend - wait for confirmation"
+    return "MIXED", 20, "No clear structure yet"
+
+# ── MAIN REFRESH ──────────────────────────────────────────────
+def refresh_data():
+    try:
+        source = "Tradier"
+        tradier_ok = G_TOKEN is not None and G_BASE_URL is not None
+        spot = None
+        exp  = None
+        opts = None
+
+        # Try Tradier first
+        if tradier_ok:
+            try:
+                spot = get_spot()
+                exp  = get_0dte_exp()
+                opts = get_chain_0dte(exp)
+            except Exception as te:
+                print(f"  [Tradier failed] {te}")
+                tradier_ok = False
+
+        # Fallback to Tastytrade (second source)
+        if not tradier_ok or not opts:
+            if G_USE_TASTYTRADE:
+                source = "Tastytrade"
+                print("  Falling back to Tastytrade API...")
+                try:
+                    if spot is None:
+                        spot = get_spot_tastytrade()
+                    if exp is None:
+                        exp = get_0dte_exp_tastytrade()
+                    opts = get_chain_tastytrade(exp)
+                except Exception as tte:
+                    print(f"  [Tastytrade failed] {tte}")
+                    opts = None  # fall through to Massive
+
+        # Fallback to Massive (third source)
+        if not opts:
+            if G_USE_MASSIVE:
+                source = "Massive"
+                print("  Falling back to Massive API...")
+                try:
+                    if spot is None:
+                        spot = get_spot_massive()
+                    if exp is None:
+                        exp = date.today().isoformat()
+                    opts = get_chain_massive(exp)
+                except Exception as me:
+                    raise RuntimeError(f"All fallbacks failed. Massive: {me}")
+            elif not tradier_ok:
+                raise RuntimeError("Tradier failed and no fallback available")
+
+        if spot is None or opts is None:
+            raise RuntimeError("No data source returned valid data")
+
+        c    = calc_centroids(opts, spot)
+        now  = _now_et()
+        ts   = now.strftime("%H:%M:%S")
+        tsd  = now.strftime("%Y-%m-%d %H:%M:%S ET")
+
+        pcr_oi = (c["put_oi"]/c["call_oi"]) if c["call_oi"]>0 else None
+
+        with CACHE_LOCK:
+            h = CACHE["history"]
+            # Rate of change vs previous tick
+            call_roc = 0; put_roc = 0
+            if h and h[-1].get("call_c") and c["call_c"]:
+                call_roc = round(c["call_c"] - h[-1]["call_c"], 2)
+            if h and h[-1].get("put_c") and c["put_c"]:
+                put_roc  = round(c["put_c"]  - h[-1]["put_c"], 2)
+
+            # 5-period smoothed RoC
+            roc5 = 0
+            if len(h)>=5:
+                c5  = [x["call_c"] for x in h[-5:] if x.get("call_c")]
+                p5  = [x["put_c"]  for x in h[-5:] if x.get("put_c")]
+                if len(c5)>=2: roc5 = round((c5[-1]-c5[0])/len(c5),2)
+
+            h.append({
+                "t": ts, "spot": round(spot,2),
+                "call_c": c["call_c"], "put_c": c["put_c"],
+                "call_roc": call_roc,  "put_roc": put_roc,
+            })
+            if len(h) > 400: h.pop(0)  # ~100 min at 15s
+
+            # Regression projections
+            call_proj = project_to_close(h, "call_c", now) if len(h)>=6 else None
+            put_proj  = project_to_close(h, "put_c",  now) if len(h)>=6 else None
+
+            # Settlement range
+            settlement = None
+            if call_proj and put_proj:
+                lo = min(call_proj, put_proj)
+                hi = max(call_proj, put_proj)
+                mid = round((lo+hi)/2)
+                settlement = {"low":lo,"high":hi,"mid":mid}
+
+            # Day character
+            is_open,secs,session = market_status()
+            post_london = session == "POST-LONDON"
+            mins_to_close = secs//60 if is_open else 0
+            day_char, day_conf, day_signal = classify_day(h)
+
+            CACHE.update({
+                "status":"live","error":None,"spot":round(spot,2),
+                "timestamp":tsd,"et_time":ts,
+                "call_centroid":c["call_c"],"put_centroid":c["put_c"],
+                "call_vol":c["call_vol"],"put_vol":c["put_vol"],"total_vol":c["total_vol"],
+                "max_call_oi":c["max_call_oi"],"max_put_oi":c["max_put_oi"],
+                "call_oi":c["call_oi"],"put_oi":c["put_oi"],"pcr_oi":round(pcr_oi,2) if pcr_oi else None,
+                "call_proj":call_proj,"put_proj":put_proj,"settlement_range":settlement,
+                "day_char":day_char,"day_conf":day_conf,"day_signal":day_signal,
+                "call_roc":call_roc,"put_roc":put_roc,"roc_5":roc5,
+                "by_strike":c["by_strike"],
+                "expiration":exp,
+                "market_open":is_open,"session_label":session,
+                "secs_until_open":secs if not is_open else 0,
+                "post_london":post_london,"mins_to_close":mins_to_close,
+            })
+
+        cc = c["call_c"] or 0; pc = c["put_c"] or 0
+        print(f"  [{ts} ET] SPX {spot:.2f} | Call {cc:.0f} ({call_roc:+.1f}) | Put {pc:.0f} ({put_roc:+.1f}) | Vol {c['total_vol']:,} | {day_char} [{source}]")
+
+    except Exception as e:
+        err=str(e); print(f"  [ERROR] {err}")
+        with CACHE_LOCK:
+            CACHE["error"]=err
+            if CACHE.get("spot") is None: CACHE["status"]="error"
+
+def data_loop():
+    while True:
+        is_open, secs_left, session = market_status()
+        if is_open:
+            with CACHE_LOCK:
+                CACHE["market_open"]   = True
+                CACHE["session_label"] = session
+                CACHE["post_london"]   = session=="POST-LONDON"
+            refresh_data()
+            time.sleep(15)
+        else:
+            with CACHE_LOCK:
+                CACHE["market_open"]     = False
+                CACHE["session_label"]   = session
+                CACHE["secs_until_open"] = secs_left
+                CACHE["status"]          = "closed"
+            mins = secs_left//60
+            print(f"  [{et_str()} ET] {session} - opens in {mins//60}h {mins%60:02d}m")
+            time.sleep(min(60, max(10, secs_left-30)))
+
+# ── HTTP server ───────────────────────────────────────────────
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self,*a): pass
+    def send_json(self,obj):
+        body=json.dumps(obj).encode()
+        self.send_response(200)
+        self.send_header("Content-Type","application/json")
+        self.send_header("Content-Length",len(body))
+        self.send_header("Access-Control-Allow-Origin","*")
+        self.end_headers(); self.wfile.write(body)
+    def do_GET(self):
+        path=self.path.split("?")[0]
+        if path in ("/","/index.html"):
+            f=BASE_DIR/"spx_centroid.html"
+            body=f.read_bytes() if f.exists() else b"<h1>spx_centroid.html missing</h1>"
+            self.send_response(200)
+            self.send_header("Content-Type","text/html; charset=utf-8")
+            self.send_header("Content-Length",len(body))
+            self.end_headers(); self.wfile.write(body)
+        elif path=="/data":
+            with CACHE_LOCK: self.send_json(dict(CACHE))
+        else: self.send_response(404); self.end_headers()
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin","*")
+        self.send_header("Access-Control-Allow-Methods","GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers","Content-Type")
+        self.end_headers()
+
+# ── Main ──────────────────────────────────────────────────────
+def main():
+    global G_TOKEN, G_BASE_URL, G_LABEL
+    print("\n  === GammaEdge SPX Centroid  v6  (VOLM methodology) ===\n")
+    G_TOKEN, G_BASE_URL, G_LABEL = load_credentials()
+    is_open, secs, session = market_status()
+    print(f"  API:     {G_LABEL}")
+    if G_USE_TASTYTRADE:
+        print(f"  Fallback 1: Tastytrade API (ready)")
+    if G_USE_MASSIVE:
+        fb_num = "2" if G_USE_TASTYTRADE else "1"
+        print(f"  Fallback {fb_num}: Massive.com API (ready)")
+    print(f"  Session: {session} ({et_str()} ET)")
+    print(f"  Method:  Pure 0DTE volume-weighted centroid\n")
+    # Start HTTP server FIRST so browser can connect immediately
+    server = HTTPServer(("localhost", PORT), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print(f"  Server listening on port {PORT}")
+
+    # Open browser right away - it shows boot screen while data loads
+    url = f"http://localhost:{PORT}"
+    print(f"  Browser -> {url}\n  Ctrl+C to stop\n")
+    webbrowser.open(url)
+
+    # Start data fetch in background (after browser is open)
+    threading.Thread(target=data_loop, daemon=True).start()
+    try:
+        while True: time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n  Stopped.")
+
+if __name__=="__main__": main()

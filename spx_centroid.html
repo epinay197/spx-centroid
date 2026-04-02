@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GammaEdge VOLM - SPX 0DTE Centroid</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@600;700&family=Orbitron:wght@700;900&display=swap');
+:root{
+  --bg:#030a12;--bg2:#061220;--bg3:#08182a;--bg4:#0b1f35;
+  --border:#0e3050;--borderg:#1a5580;
+  --call:#00ff88;--call2:rgba(0,255,136,.08);
+  --put:#ff3355;--put2:rgba(255,51,85,.08);
+  --spot:#cc55ff;--ma:#7755ff;
+  --reg-call:rgba(0,255,136,.35);--reg-put:rgba(255,51,85,.35);
+  --acc:#00ccff;--accf:rgba(0,204,255,.07);
+  --warn:#ff8800;--gold:#ffcc00;
+  --txt:#b8ddf8;--dim:#2a5070;--dimm:#3d6e8a;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);font-family:'Rajdhani',sans-serif;color:var(--txt);display:flex;flex-direction:column;height:100vh}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,204,255,.006) 2px,rgba(0,204,255,.006) 3px);pointer-events:none;z-index:9998}
+
+/* BOOT */
+.boot{position:fixed;inset:0;z-index:2000;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .5s}
+.boot.hidden{opacity:0;pointer-events:none}
+.boot-logo{font-family:'Orbitron',monospace;font-size:1.6rem;font-weight:900;letter-spacing:4px;color:var(--acc)}
+.boot-logo b{color:#fff}
+.boot-bar-wrap{width:240px;height:2px;background:rgba(0,204,255,.08);border-radius:1px;overflow:hidden}
+.boot-bar{height:100%;background:var(--acc);width:0%;transition:width .4s ease}
+.boot-status{font-family:'Share Tech Mono',monospace;font-size:.6rem;color:var(--acc);letter-spacing:1px}
+
+/* CLOSED OVERLAY */
+.closed-overlay{position:fixed;inset:0;z-index:3000;background:rgba(3,10,18,.97);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;transition:opacity .4s}
+.closed-overlay.hidden{opacity:0;pointer-events:none}
+.co-logo{font-family:'Orbitron',monospace;font-size:1.4rem;font-weight:900;letter-spacing:3px;color:var(--acc)}
+.co-logo b{color:#fff}
+.co-session{font-family:'Share Tech Mono',monospace;font-size:.9rem;letter-spacing:3px;padding:4px 16px;border-radius:2px;border:1px solid var(--dim);color:var(--dimm)}
+.co-session.pre{border-color:var(--gold);color:var(--gold)}
+.co-clock{font-family:'Orbitron',monospace;font-size:2.6rem;font-weight:700;color:var(--txt);letter-spacing:4px}
+.co-lbl{font-family:'Share Tech Mono',monospace;font-size:.58rem;color:var(--dimm);letter-spacing:2px}
+.co-countdown{font-family:'Share Tech Mono',monospace;font-size:.65rem;color:var(--acc);letter-spacing:2px}
+.co-note{font-family:'Share Tech Mono',monospace;font-size:.52rem;color:var(--dim);letter-spacing:1px;text-align:center;max-width:360px;line-height:1.6}
+
+/* TOP BAR */
+.topbar{height:42px;flex-shrink:0;background:linear-gradient(90deg,#020810,#041018,#020810);border-bottom:1px solid var(--borderg);display:flex;align-items:center;padding:0 12px;gap:8px;box-shadow:0 1px 16px rgba(0,204,255,.08)}
+.logo{display:flex;align-items:center;gap:7px}
+.logo-ring{width:27px;height:27px;border-radius:50%;border:2px solid var(--acc);display:flex;align-items:center;justify-content:center;box-shadow:0 0 10px rgba(0,204,255,.4);animation:rpulse 2.5s infinite}
+@keyframes rpulse{0%,100%{box-shadow:0 0 5px rgba(0,204,255,.2)}50%{box-shadow:0 0 16px rgba(0,204,255,.7)}}
+.logo-ring svg{width:12px;height:12px}
+.logo-name{font-family:'Orbitron',monospace;font-size:.82rem;font-weight:900;letter-spacing:2px}
+.logo-name b{color:var(--acc)}
+.logo-sub{font-size:.4rem;color:var(--dim);letter-spacing:2px;font-family:'Share Tech Mono',monospace}
+.tsep{width:1px;height:22px;background:var(--border);flex-shrink:0}
+.hst{display:flex;flex-direction:column;align-items:center;min-width:62px}
+.hst-l{font-size:.38rem;color:var(--dim);letter-spacing:1px;text-transform:uppercase}
+.hst-v{font-family:'Share Tech Mono',monospace;font-size:.68rem;font-weight:700}
+.hst-v.call{color:var(--call)}.hst-v.put{color:var(--put)}.hst-v.spot{color:var(--spot)}
+.hst-v.acc{color:var(--acc)}.hst-v.gold{color:var(--gold)}.hst-v.warn{color:var(--warn)}
+.spacer{flex:1}
+.et-clock{font-family:'Share Tech Mono',monospace;font-size:.56rem;color:var(--dimm);letter-spacing:1px}
+.session-badge{font-family:'Share Tech Mono',monospace;font-size:.52rem;letter-spacing:1.5px;padding:3px 8px;border-radius:2px;border:1px solid;display:flex;align-items:center;gap:4px}
+.session-badge.live{border-color:var(--call);color:var(--call);background:var(--call2)}
+.session-badge.prelondon{border-color:var(--gold);color:var(--gold);background:rgba(255,204,0,.05)}
+.session-badge.pre{border-color:var(--gold);color:var(--gold);background:rgba(255,204,0,.05)}
+.session-badge.closed{border-color:var(--dim);color:var(--dimm);background:transparent}
+.dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+.dot.live{background:var(--call);animation:blink 1.1s infinite}
+.dot.prelondon,.dot.pre{background:var(--gold)}
+.dot.closed{background:var(--dim)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.1}}
+
+/* LAYOUT */
+.body{display:flex;flex:1;overflow:hidden;min-height:0}
+
+/* LEFT PANEL */
+.lpanel{width:200px;flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+.lsec{padding:8px 10px;border-bottom:1px solid var(--border)}
+.slbl{font-size:.44rem;color:var(--dim);letter-spacing:2px;text-transform:uppercase;margin-bottom:5px;font-family:'Share Tech Mono',monospace}
+
+/* DAY CHARACTER CARD - the main signal */
+.day-card{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:10px;transition:border-color .4s,background .4s;margin-bottom:0}
+.day-card.trend-up{border-color:rgba(0,255,136,.4);background:rgba(0,255,136,.04)}
+.day-card.trend-down{border-color:rgba(255,51,85,.4);background:rgba(255,51,85,.04)}
+.day-card.chop{border-color:rgba(255,204,0,.35);background:rgba(255,204,0,.04)}
+.day-card.settling{border-color:rgba(0,204,255,.35);background:rgba(0,204,255,.04)}
+.day-card.mixed{border-color:var(--border)}
+.day-char{font-family:'Orbitron',monospace;font-size:.85rem;font-weight:900;letter-spacing:1px;transition:color .4s}
+.day-char.trend-up{color:var(--call)}.day-char.trend-down{color:var(--put)}
+.day-char.chop{color:var(--gold)}.day-char.settling{color:var(--acc)}.day-char.mixed{color:var(--dimm)}
+.day-conf{font-family:'Share Tech Mono',monospace;font-size:.52rem;color:var(--dimm);margin-top:2px}
+.day-signal{font-size:.5rem;color:var(--dimm);margin-top:4px;line-height:1.4;font-family:'Share Tech Mono',monospace}
+
+/* London close flag */
+.london-flag{background:rgba(255,204,0,.08);border:1px solid rgba(255,204,0,.25);border-radius:3px;padding:4px 8px;margin-bottom:0}
+.london-flag.post{background:rgba(0,255,136,.05);border-color:rgba(0,255,136,.2)}
+.lf-lbl{font-size:.42rem;color:var(--gold);letter-spacing:1px;font-family:'Share Tech Mono',monospace}
+.lf-lbl.post{color:var(--call)}
+.lf-val{font-family:'Share Tech Mono',monospace;font-size:.58rem;font-weight:700}
+
+/* Centroid values */
+.msr{display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid rgba(14,48,80,.35)}
+.msr:last-child{border:none}
+.msk{font-size:.48rem;color:var(--dimm)}.msv{font-family:'Share Tech Mono',monospace;font-size:.58rem;font-weight:700}
+.roc-bar-wrap{height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;margin-top:2px}
+.roc-bar{height:100%;border-radius:2px;transition:width .5s,background .3s}
+
+/* Settlement projection box */
+.settle-box{background:var(--bg4);border:1px solid var(--border);border-radius:3px;padding:7px 9px}
+.settle-title{font-family:'Share Tech Mono',monospace;font-size:.44rem;color:var(--dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px}
+.settle-range{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
+.settle-mid{font-family:'Orbitron',monospace;font-size:.9rem;font-weight:700;color:var(--acc);text-align:center}
+.settle-sub{font-family:'Share Tech Mono',monospace;font-size:.42rem;color:var(--dimm);text-align:center;margin-top:1px}
+
+/* RoC display */
+.roc-row{display:flex;gap:6px;margin-top:4px}
+.roc-item{flex:1;text-align:center}
+.roc-lbl{font-size:.42rem;color:var(--dim);font-family:'Share Tech Mono',monospace}
+.roc-val{font-family:'Orbitron',monospace;font-size:.7rem;font-weight:700}
+
+/* OI structural levels */
+.oi-row{display:flex;justify-content:space-between;font-family:'Share Tech Mono',monospace;font-size:.5rem;padding:2px 0;border-bottom:1px solid rgba(14,48,80,.25)}
+.oi-row:last-child{border:none}
+.oi-k{color:var(--dimm)}.oi-v{font-weight:700}
+
+/* Session timer */
+.session-timer{padding:7px 10px;border-bottom:1px solid var(--border)}
+.timer-bar-wrap{height:4px;background:var(--bg4);border-radius:2px;overflow:hidden;margin:4px 0 2px}
+.timer-bar{height:100%;background:linear-gradient(90deg,var(--call),var(--acc));border-radius:2px;transition:width 1s linear}
+.timer-ends{display:flex;justify-content:space-between;font-size:.44rem;color:var(--dim);font-family:'Share Tech Mono',monospace}
+
+/* Vol flow */
+.vol-row{display:flex;gap:4px;align-items:stretch}
+.vol-side{flex:1;padding:5px 7px;border-radius:3px;border:1px solid}
+.vol-side.call-side{border-color:rgba(0,255,136,.2);background:rgba(0,255,136,.03)}
+.vol-side.put-side{border-color:rgba(255,51,85,.2);background:rgba(255,51,85,.03)}
+.vol-type{font-size:.42rem;letter-spacing:1px;font-family:'Share Tech Mono',monospace;margin-bottom:2px}
+.vol-num{font-family:'Orbitron',monospace;font-size:.7rem;font-weight:700}
+.vol-roc{font-family:'Share Tech Mono',monospace;font-size:.5rem;margin-top:1px}
+
+/* tape */
+.tape-section{flex:1;overflow:hidden;display:flex;flex-direction:column;padding:5px 10px;min-height:50px}
+.tape-scroll{flex:1;overflow-y:auto}
+.ti{padding:2px 0;border-bottom:1px solid rgba(14,48,80,.28);font-family:'Share Tech Mono',monospace;font-size:.46rem}
+.ti-time{color:var(--dim)}.ti-v.up{color:var(--call)}.ti-v.dn{color:var(--put)}.ti-v.neut{color:var(--gold)}.ti-v.acc{color:var(--acc)}
+
+/* CHART AREA */
+.chartarea{flex:1;display:flex;flex-direction:column;overflow:hidden;padding:8px 10px;gap:7px;min-width:0}
+.cc{background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 10px;display:flex;flex-direction:column}
+.cc.main{flex:1;min-height:0}.cc.dist{height:130px;flex-shrink:0}
+.ch{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5px;flex-wrap:wrap;gap:3px}
+.ctitle{font-family:'Orbitron',monospace;font-size:.52rem;color:var(--acc);letter-spacing:1.5px}
+.cmeta{font-family:'Share Tech Mono',monospace;font-size:.44rem;color:var(--dimm);margin-top:1px}
+.legend{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-family:'Share Tech Mono',monospace;font-size:.46rem}
+.leg{display:flex;align-items:center;gap:3px}
+.ll{width:12px;height:2px;border-radius:1px;flex-shrink:0}
+.ld{width:12px;height:0;border-top:2px dashed;flex-shrink:0;opacity:.6}
+.canvas-wrap{flex:1;min-height:0;position:relative}
+
+/* RIGHT PANEL */
+.rpanel{width:155px;flex-shrink:0;background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+.rs{padding:7px 10px;border-bottom:1px solid var(--border)}
+.rl{font-size:.44rem;color:var(--dim);letter-spacing:2px;text-transform:uppercase;margin-bottom:5px;font-family:'Share Tech Mono',monospace}
+.skr{display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid rgba(14,48,80,.22);font-family:'Share Tech Mono',monospace;font-size:.5rem}
+.skr:last-child{border:none}
+.skl{color:var(--dimm)}.skv{font-weight:700}
+.skv.call{color:var(--call)}.skv.put{color:var(--put)}.skv.acc{color:var(--acc)}.skv.gold{color:var(--gold)}.skv.warn{color:var(--warn)}
+.ctrl-col{padding:7px 10px;display:flex;flex-direction:column;gap:5px}
+.ctl{font-size:.44rem;color:var(--dimm);letter-spacing:1px;font-family:'Share Tech Mono',monospace}
+.cbtn{width:100%;padding:5px;border-radius:2px;cursor:pointer;font-family:'Share Tech Mono',monospace;font-size:.5rem;letter-spacing:1px;border:1px solid;transition:all .2s}
+.cbtn.ref{border-color:var(--acc);color:var(--acc);background:var(--accf)}.cbtn.ref:hover{background:rgba(0,204,255,.15)}
+.nxt{font-family:'Share Tech Mono',monospace;font-size:.46rem;color:var(--dim);text-align:center}
+
+/* ALERT */
+.alert-banner{position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:8888;display:flex;align-items:center;gap:9px;padding:6px 18px;border-radius:2px;border:1px solid;font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1.5px;pointer-events:none;animation:alert-in .3s ease,alert-out .4s ease 4.6s forwards}
+@keyframes alert-in{from{opacity:0;transform:translateX(-50%) translateY(-6px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+@keyframes alert-out{to{opacity:0}}
+.alert-banner.trend-up{border-color:var(--call);color:var(--call);background:rgba(3,10,18,.97)}
+.alert-banner.trend-down{border-color:var(--put);color:var(--put);background:rgba(3,10,18,.97)}
+.alert-banner.chop{border-color:var(--gold);color:var(--gold);background:rgba(3,10,18,.97)}
+.alert-banner.settling{border-color:var(--acc);color:var(--acc);background:rgba(3,10,18,.97)}
+.alert-pulse{width:7px;height:7px;border-radius:50%;background:currentColor;animation:apulse .7s infinite}
+@keyframes apulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(1.6)}}
+
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--borderg);border-radius:2px}
+</style>
+</head>
+<body>
+
+<div class="boot" id="boot">
+  <div class="boot-logo">GAMMA<b>EDGE</b></div>
+  <div style="font-family:'Share Tech Mono',monospace;font-size:.56rem;color:var(--dim);letter-spacing:3px">SPX 0DTE VOLUME CENTROID v6</div>
+  <div class="boot-bar-wrap"><div class="boot-bar" id="bootBar"></div></div>
+  <div class="boot-status" id="bootStatus">Connecting...</div>
+</div>
+
+<div class="closed-overlay hidden" id="closedOverlay">
+  <div class="co-logo">GAMMA<b>EDGE</b></div>
+  <div class="co-session" id="coSession">MARKET CLOSED</div>
+  <div>
+    <div class="co-clock" id="coClock">--:--:--</div>
+    <div class="co-lbl">NEW YORK TIME</div>
+  </div>
+  <div class="co-countdown" id="coCountdown"></div>
+  <div class="co-note">
+    SPX session  09:30 - 16:15 ET<br>
+    Signals most reliable after 11:30 ET (London close)<br>
+    Pure 0DTE volume centroid - no OI blending
+  </div>
+</div>
+
+<div class="topbar">
+  <div class="logo">
+    <div class="logo-ring">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#00ccff" stroke-width="2.5">
+        <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
+        <polyline points="16 7 22 7 22 13"/>
+      </svg>
+    </div>
+    <div>
+      <div class="logo-name">GAMMA<b>EDGE</b></div>
+      <div class="logo-sub">SPX 0DTE VOLM CENTROID v6</div>
+    </div>
+  </div>
+  <div class="tsep"></div>
+  <div class="hst"><div class="hst-l">SPX SPOT</div><div class="hst-v spot" id="h-spot">--</div></div>
+  <div class="hst"><div class="hst-l">CALL CENT</div><div class="hst-v call" id="h-callc">--</div></div>
+  <div class="hst"><div class="hst-l">PUT CENT</div><div class="hst-v put" id="h-putc">--</div></div>
+  <div class="hst"><div class="hst-l">SPREAD</div><div class="hst-v acc" id="h-spread">--</div></div>
+  <div class="hst"><div class="hst-l">CALL PROJ</div><div class="hst-v call" id="h-cproj">--</div></div>
+  <div class="hst"><div class="hst-l">PUT PROJ</div><div class="hst-v put" id="h-pproj">--</div></div>
+  <div class="hst"><div class="hst-l">SETTLE MID</div><div class="hst-v gold" id="h-settle">--</div></div>
+  <div class="hst"><div class="hst-l">0DTE VOL</div><div class="hst-v acc" id="h-vol">--</div></div>
+  <div class="spacer"></div>
+  <div class="et-clock" id="etClock">--:--:-- ET</div>
+  <div class="tsep"></div>
+  <div class="session-badge closed" id="sessionBadge">
+    <span class="dot closed" id="sessionDot"></span>
+    <span id="sessionTxt">CONNECTING</span>
+  </div>
+</div>
+
+<div class="body">
+<div class="lpanel">
+
+  <div class="lsec">
+    <div class="slbl">Day Character</div>
+    <div class="day-card" id="dayCard">
+      <div class="day-char mixed" id="dayChar">DEVELOPING</div>
+      <div class="day-conf" id="dayConf">Confidence: --</div>
+      <div class="day-signal" id="daySignal">Awaiting data...</div>
+    </div>
+  </div>
+
+  <div class="lsec">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+      <div class="slbl" style="margin:0">Signal Quality</div>
+      <div class="london-flag" id="londonFlag" style="padding:2px 6px">
+        <div class="lf-lbl" id="londonLbl">PRE-LONDON</div>
+      </div>
+    </div>
+    <div class="msr"><span class="msk">London Close</span><span class="msv" style="color:var(--gold)">11:30 ET</span></div>
+    <div class="msr"><span class="msk">Best signals</span><span class="msv" style="color:var(--call)">After 11:30</span></div>
+    <div class="msr"><span class="msk">Time remain</span><span class="msv" id="s-timerem" style="color:var(--acc)">--</span></div>
+  </div>
+
+  <div class="lsec">
+    <div class="slbl">VOLM Centroids (0DTE Vol)</div>
+    <div class="msr">
+      <span class="msk">Call Centroid</span>
+      <span class="msv" style="color:var(--call)" id="s-callc">--</span>
+    </div>
+    <div class="roc-bar-wrap"><div class="roc-bar" id="callRocBar" style="width:50%;background:var(--call)"></div></div>
+    <div class="msr" style="margin-top:4px">
+      <span class="msk">Put Centroid</span>
+      <span class="msv" style="color:var(--put)" id="s-putc">--</span>
+    </div>
+    <div class="roc-bar-wrap"><div class="roc-bar" id="putRocBar" style="width:50%;background:var(--put)"></div></div>
+    <div class="roc-row" style="margin-top:5px">
+      <div class="roc-item">
+        <div class="roc-lbl" style="color:var(--call)">CALL ROC</div>
+        <div class="roc-val" id="callRoc" style="color:var(--call)">--</div>
+      </div>
+      <div class="roc-item">
+        <div class="roc-lbl" style="color:var(--put)">PUT ROC</div>
+        <div class="roc-val" id="putRoc" style="color:var(--put)">--</div>
+      </div>
+      <div class="roc-item">
+        <div class="roc-lbl">SPREAD</div>
+        <div class="roc-val" id="spreadVal" style="color:var(--acc)">--</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="lsec">
+    <div class="slbl">Settlement Projection (16:15 ET)</div>
+    <div class="settle-box">
+      <div class="settle-range">
+        <span style="font-family:'Share Tech Mono',monospace;font-size:.52rem;color:var(--put)" id="settleL">--</span>
+        <span style="font-family:'Share Tech Mono',monospace;font-size:.44rem;color:var(--dim)">|</span>
+        <span style="font-family:'Share Tech Mono',monospace;font-size:.52rem;color:var(--call)" id="settleH">--</span>
+      </div>
+      <div class="settle-mid" id="settleMid">--</div>
+      <div class="settle-sub">Projected settlement mid</div>
+    </div>
+  </div>
+
+  <div class="lsec">
+    <div class="slbl">0DTE Volume Flow</div>
+    <div class="vol-row">
+      <div class="vol-side call-side">
+        <div class="vol-type" style="color:var(--call)">CALLS</div>
+        <div class="vol-num" style="color:var(--call)" id="s-cvol">--</div>
+        <div class="vol-roc" style="color:var(--call)" id="s-croc">--</div>
+      </div>
+      <div class="vol-side put-side">
+        <div class="vol-type" style="color:var(--put)">PUTS</div>
+        <div class="vol-num" style="color:var(--put)" id="s-pvol">--</div>
+        <div class="vol-roc" style="color:var(--put)" id="s-proc">--</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="lsec">
+    <div class="slbl">Session Timer</div>
+    <div class="timer-bar-wrap"><div class="timer-bar" id="timerBar" style="width:0%"></div></div>
+    <div class="timer-ends">
+      <span>09:30</span>
+      <span id="timerRemain">--</span>
+      <span>16:15</span>
+    </div>
+  </div>
+
+  <div class="tape-section">
+    <div class="slbl">Event Log</div>
+    <div class="tape-scroll" id="tape"></div>
+  </div>
+</div>
+
+<div class="chartarea">
+  <div class="cc main">
+    <div class="ch">
+      <div>
+        <div class="ctitle">SPX 0DTE VOLUME CENTROID - VOLM METHODOLOGY</div>
+        <div class="cmeta" id="chartMeta">0DTE pure volume-weighted centroids + linear regression to close</div>
+      </div>
+      <div class="legend">
+        <div class="leg"><div class="ll" style="background:var(--call)"></div><span style="color:var(--call)">Call Cent</span></div>
+        <div class="leg"><div class="ll" style="background:var(--put)"></div><span style="color:var(--put)">Put Cent</span></div>
+        <div class="leg"><div class="ll" style="background:var(--call);opacity:.4"></div><span style="color:var(--call);opacity:.7">Call Reg</span></div>
+        <div class="leg"><div class="ll" style="background:var(--put);opacity:.4"></div><span style="color:var(--put);opacity:.7">Put Reg</span></div>
+        <div class="leg"><div class="ll" style="background:var(--spot)"></div><span style="color:var(--spot)">SPX</span></div>
+      </div>
+    </div>
+    <div class="canvas-wrap"><canvas id="centChart"></canvas></div>
+  </div>
+  <div class="cc dist">
+    <div class="ch">
+      <div>
+        <div class="ctitle">0DTE VOLUME DISTRIBUTION BY STRIKE</div>
+        <div class="cmeta" id="distMeta">Call vol (green) vs Put vol (red) - structural reference only</div>
+      </div>
+      <div class="legend">
+        <div class="leg"><div class="ll" style="background:var(--call)"></div><span style="color:var(--call)">Call Vol</span></div>
+        <div class="leg"><div class="ll" style="background:var(--put)"></div><span style="color:var(--put)">Put Vol</span></div>
+      </div>
+    </div>
+    <div style="position:relative;height:84px"><canvas id="distChart"></canvas></div>
+  </div>
+</div>
+
+<div class="rpanel">
+  <div class="rs">
+    <div class="rl">OI Structural Levels</div>
+    <div class="skr"><span class="skl">Max Call OI</span><span class="skv call" id="r-mco">--</span></div>
+    <div class="skr"><span class="skl">Max Put OI</span><span class="skv put" id="r-mpo">--</span></div>
+    <div class="skr"><span class="skl">P/C OI Ratio</span><span class="skv acc" id="r-pcr">--</span></div>
+    <div class="skr"><span class="skl">Call OI</span><span class="skv call" id="r-coi">--</span></div>
+    <div class="skr"><span class="skl">Put OI</span><span class="skv put" id="r-poi">--</span></div>
+  </div>
+  <div class="rs">
+    <div class="rl">Centroid Alignment</div>
+    <div class="skr"><span class="skl">Both trend up</span><span class="skv call" id="r-bothup">--</span></div>
+    <div class="skr"><span class="skl">Both trend dn</span><span class="skv put" id="r-bothdn">--</span></div>
+    <div class="skr"><span class="skl">Convergence</span><span class="skv gold" id="r-conv">--</span></div>
+    <div class="skr"><span class="skl">Divergence</span><span class="skv acc" id="r-div">--</span></div>
+    <div class="skr"><span class="skl">Settle range</span><span class="skv gold" id="r-range">--</span></div>
+  </div>
+  <div class="rs">
+    <div class="rl">Trade Setup Guide</div>
+    <div id="tradeGuide" style="font-family:'Share Tech Mono',monospace;font-size:.46rem;color:var(--dimm);line-height:1.6">
+      Awaiting market data...
+    </div>
+  </div>
+  <div class="ctrl-col">
+    <button class="cbtn ref" onclick="fetchNow()">REFRESH NOW</button>
+    <div class="nxt">Next: <span id="cdNum">--</span>s</div>
+  </div>
+</div>
+</div>
+
+<script>
+const API = 'http://localhost:8765';
+let centChart, distChart, countdown=15, cdTimer=null, pollTimer=null, prevDayChar='';
+let lastErrTs=0;
+
+// ── ET clock ─────────────────────────────────────────────────
+function updateClock(){
+  const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+  const p=n=>String(n).padStart(2,'0');
+  document.getElementById('etClock').textContent=
+    `${p(et.getHours())}:${p(et.getMinutes())}:${p(et.getSeconds())} ET`;
+  document.getElementById('coClock').textContent=
+    `${p(et.getHours())}:${p(et.getMinutes())}:${p(et.getSeconds())}`;
+}
+setInterval(updateClock,1000); updateClock();
+
+// ── Boot ──────────────────────────────────────────────────────
+async function boot(){
+  setBootProgress(10,'Connecting to server...');
+  for(let i=0;i<15;i++){
+    try{
+      setBootProgress(10+i*4,`Connecting (${i+1})...`);
+      const r=await fetch(API+'/data',{signal:AbortSignal.timeout(2000)});
+      const d=await r.json();
+      if(['live','connecting','error','closed'].includes(d.status)){setBootProgress(75,'Initialising...');break;}
+    }catch(_){await sleep(1000);}
+    if(i===14){setBootProgress(100,'Cannot reach server');document.getElementById('bootStatus').style.color='var(--put)';return;}
+  }
+  initCharts();
+  setBootProgress(90,'Fetching data...');
+  await poll();
+  setBootProgress(100,'Ready');
+  await sleep(450);
+  document.getElementById('boot').classList.add('hidden');
+  startPolling();
+}
+function setBootProgress(pct,msg){document.getElementById('bootBar').style.width=pct+'%';document.getElementById('bootStatus').textContent=msg;}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+// ── Session UI ────────────────────────────────────────────────
+function setSessionUI(cls,label){
+  const b=document.getElementById('sessionBadge'),d=document.getElementById('sessionDot'),t=document.getElementById('sessionTxt');
+  b.className='session-badge '+cls; d.className='dot '+cls; t.textContent=label;
+}
+function updateClosedOverlay(d){
+  const o=document.getElementById('closedOverlay'),sl=d.session_label||'';
+  if(d.status==='closed'){
+    o.classList.remove('hidden');
+    const el=document.getElementById('coSession');
+    el.className='co-session '+(sl==='PRE-MARKET'?'pre':'');
+    el.textContent=sl||'MARKET CLOSED';
+    const s=d.secs_until_open||0;
+    if(s>0){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60;
+      document.getElementById('coCountdown').textContent=`Opens in ${h>0?h+'h ':''}${String(m).padStart(2,'0')}m ${String(sc).padStart(2,'0')}s`;}
+    else document.getElementById('coCountdown').textContent='';
+    setSessionUI(sl==='PRE-MARKET'?'pre':'closed',sl||'CLOSED');
+  } else {
+    o.classList.add('hidden');
+    const isPost=d.post_london;
+    setSessionUI(isPost?'live':'prelondon', isPost?'LIVE':'PRE-LONDON');
+  }
+}
+
+// ── Polling ───────────────────────────────────────────────────
+async function poll(){
+  try{
+    const r=await fetch(API+'/data',{signal:AbortSignal.timeout(10000)});
+    const d=await r.json();
+    lastErrTs=0;
+    updateClosedOverlay(d);
+    if(d.status==='live') renderData(d);
+  }catch(e){
+    const now=Date.now();
+    if(now-lastErrTs>60000){addTape('ERR','Server connection lost','warn');lastErrTs=now;}
+  }
+}
+function startPolling(){
+  clearInterval(pollTimer);clearInterval(cdTimer);
+  pollTimer=setInterval(poll,15000); countdown=15;
+  cdTimer=setInterval(()=>{countdown--;if(countdown<=0)countdown=15;const el=document.getElementById('cdNum');if(el)el.textContent=countdown;},1000);
+}
+async function fetchNow(){clearInterval(pollTimer);clearInterval(cdTimer);await poll();startPolling();}
+
+// ── Helpers ───────────────────────────────────────────────────
+const f2=n=>n==null?'--':Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const f0=n=>n==null?'--':Math.round(n).toLocaleString('en-US');
+const fK=n=>n>=1000?(n/1000).toFixed(1)+'K':String(n);
+const sign=n=>n>=0?'+':''
+function setEl(id,v){const e=document.getElementById(id);if(e)e.textContent=v;}
+
+// ── Main render ───────────────────────────────────────────────
+function renderData(d){
+  const cc=d.call_centroid, pc=d.put_centroid, spot=d.spot;
+  const cproj=d.call_proj, pproj=d.put_proj;
+  const sr=d.settlement_range;
+
+  // Top bar
+  setEl('h-spot',   f2(spot));
+  setEl('h-callc',  cc ? f0(cc) : '--');
+  setEl('h-putc',   pc ? f0(pc) : '--');
+  if(cc&&pc){
+    const sp=cc-pc;
+    const spEl=document.getElementById('h-spread');
+    if(spEl){spEl.textContent=(sp>=0?'+':'')+f0(sp);spEl.style.color=sp>15?'var(--call)':sp<-15?'var(--put)':'var(--acc)';}
+  }
+  setEl('h-cproj', cproj ? f0(cproj) : '--');
+  setEl('h-pproj', pproj ? f0(pproj) : '--');
+  setEl('h-settle', sr ? f0(sr.mid) : '--');
+  setEl('h-vol',   fK(d.total_vol||0));
+
+  // Day character card
+  const dc=d.day_char||'DEVELOPING';
+  const dcCls=dc.includes('TREND UP')?'trend-up':dc.includes('TREND DOWN')?'trend-down':
+    dc==='CHOP'?'chop':dc==='SETTLING'?'settling':'mixed';
+  const dcEl=document.getElementById('dayCard');
+  if(dcEl)dcEl.className='day-card '+dcCls;
+  const dcTxt=document.getElementById('dayChar');
+  if(dcTxt){dcTxt.textContent=dc;dcTxt.className='day-char '+dcCls;}
+  setEl('dayConf',`Confidence: ${d.day_conf||0}%`);
+  setEl('daySignal',d.day_signal||'');
+
+  // Fire alert on day char change
+  if(dc!==prevDayChar && dc!=='DEVELOPING' && dc!=='UNKNOWN'){
+    fireAlert(dc, dcCls, d.day_signal||'');
+    addTape(d.et_time||'--', `DAY: ${dc} (${d.day_conf}%)`, dcCls.includes('down')?'dn':dcCls==='chop'||dcCls==='settling'?'neut':'up');
+    prevDayChar=dc;
+  }
+
+  // London flag
+  const lf=document.getElementById('londonFlag'),ll=document.getElementById('londonLbl');
+  if(d.post_london){
+    if(lf)lf.className='london-flag post';
+    if(ll){ll.textContent='POST-LONDON';ll.className='lf-lbl post';}
+  } else {
+    if(lf)lf.className='london-flag';
+    if(ll){ll.textContent='PRE-LONDON';ll.className='lf-lbl';}
+  }
+
+  // Time remaining
+  const mc=d.mins_to_close||0;
+  const h2=Math.floor(mc/60),m2=mc%60;
+  setEl('s-timerem', mc>0?`${h2>0?h2+'h ':''}${m2}m to close`:'--');
+
+  // Session progress bar
+  const totalMins=(16*60+15)-(9*60+30);
+  const elapsedMins=totalMins-mc;
+  const pct=Math.min(Math.max(elapsedMins/totalMins*100,0),100);
+  const tb=document.getElementById('timerBar');if(tb)tb.style.width=pct+'%';
+  setEl('timerRemain',mc>0?`${m2}m left`:'done');
+
+  // Centroids + RoC
+  setEl('s-callc', cc ? f0(cc) : '--');
+  setEl('s-putc',  pc ? f0(pc) : '--');
+  const cr=d.call_roc||0, pr=d.put_roc||0;
+  const crocEl=document.getElementById('callRoc'), procEl=document.getElementById('putRoc');
+  if(crocEl){crocEl.textContent=(cr>=0?'+':'')+f2(cr);crocEl.style.color=cr>0?'var(--call)':cr<0?'rgba(255,51,85,.7)':'var(--dimm)';}
+  if(procEl){procEl.textContent=(pr>=0?'+':'')+f2(pr);procEl.style.color=pr<0?'var(--put)':pr>0?'rgba(0,255,136,.7)':'var(--dimm)';}
+  // RoC bars (50% = neutral, expand left/right)
+  const crPct=Math.min(Math.max(50+cr*10,0),100);
+  const prPct=Math.min(Math.max(50+pr*10,0),100);
+  const crBar=document.getElementById('callRocBar'),prBar=document.getElementById('putRocBar');
+  if(crBar){crBar.style.width=crPct+'%';crBar.style.background=cr>0?'var(--call)':cr<0?'rgba(255,51,85,.5)':'var(--dim)';}
+  if(prBar){prBar.style.width=prPct+'%';prBar.style.background=pr<0?'var(--put)':pr>0?'rgba(0,255,136,.5)':'var(--dim)';}
+  // Spread
+  const spEl=document.getElementById('spreadVal');
+  if(spEl&&cc&&pc){const sp=cc-pc;spEl.textContent=(sp>=0?'+':'')+f0(sp);spEl.style.color=sp>20?'var(--call)':sp<-20?'var(--put)':'var(--acc)';}
+
+  // Settlement projection
+  setEl('settleL', pproj ? f0(pproj) : '--');
+  setEl('settleH', cproj ? f0(cproj) : '--');
+  setEl('settleMid', sr ? f0(sr.mid) : '--');
+
+  // Volume flow
+  setEl('s-cvol', fK(d.call_vol||0));
+  setEl('s-pvol', fK(d.put_vol||0));
+  const crocSign=cr>=0?'+':''; const procSign=pr>=0?'+':'';
+  setEl('s-croc', `${crocSign}${f2(cr)} ROC`);
+  setEl('s-proc', `${procSign}${f2(pr)} ROC`);
+
+  // OI structural levels (right panel)
+  setEl('r-mco', d.max_call_oi ? f0(d.max_call_oi) : '--');
+  setEl('r-mpo', d.max_put_oi  ? f0(d.max_put_oi)  : '--');
+  setEl('r-pcr', d.pcr_oi ? d.pcr_oi.toFixed(2) : '--');
+  setEl('r-coi', fK(d.call_oi||0));
+  setEl('r-poi', fK(d.put_oi||0));
+
+  // Centroid alignment stats
+  const hist=d.history||[];
+  if(hist.length>=6){
+    const callVals=hist.slice(-12).map(h=>h.call_c).filter(Boolean);
+    const putVals =hist.slice(-12).map(h=>h.put_c).filter(Boolean);
+    if(callVals.length>=4&&putVals.length>=4){
+      const cSlope=(callVals[callVals.length-1]-callVals[0])/callVals.length;
+      const pSlope=(putVals[putVals.length-1]-putVals[0])/putVals.length;
+      const bothUp =cSlope>0.1&&pSlope>0.1;
+      const bothDn =cSlope<-0.1&&pSlope<-0.1;
+      const conv   =Math.sign(cSlope)!==Math.sign(pSlope);
+      const range  =sr?(f0(sr.low)+' - '+f0(sr.high)):'--';
+      setEl('r-bothup', bothUp  ?'YES':'--');
+      setEl('r-bothdn', bothDn  ?'YES':'--');
+      setEl('r-conv',   conv    ?'YES':'NO');
+      setEl('r-div',    !conv   ?'YES':'NO');
+      setEl('r-range',  range);
+      document.getElementById('r-bothup').style.color=bothUp?'var(--call)':'var(--dimm)';
+      document.getElementById('r-bothdn').style.color=bothDn?'var(--put)':'var(--dimm)';
+
+      // Trade guide
+      const guide=getTradeGuide(dc,d.post_london,cSlope,pSlope,d.day_conf,sr,spot);
+      const tg=document.getElementById('tradeGuide');
+      if(tg)tg.innerHTML=guide;
+    }
+  }
+
+  // Chart meta
+  setEl('chartMeta',`${d.timestamp||''}  |  Exp: ${d.expiration||'--'}  |  PCR: ${d.pcr_oi||'--'}`);
+  setEl('distMeta',`0DTE vol dist  |  Call: ${fK(d.call_vol||0)}  |  Put: ${fK(d.put_vol||0)}  |  Total: ${fK(d.total_vol||0)}`);
+
+  // Update charts
+  if(hist.length>=2){
+    centChart.data.labels=hist.map(h=>h.t);
+    centChart.data.datasets[0].data=hist.map(h=>h.call_c);
+    centChart.data.datasets[1].data=hist.map(h=>h.put_c);
+    centChart.data.datasets[2].data=hist.map(h=>h.spot);
+    // Regression overlay: extend last known regression to close as dashed
+    // Just show the raw history + a single projection point at end
+    const len=hist.length;
+    if(cproj&&len>4){
+      const regCall=hist.map((_,i)=>null);
+      regCall[0]=hist[0].call_c;
+      regCall[len-1]=hist[len-1].call_c;
+      centChart.data.datasets[3].data=regCall;
+    }
+    if(pproj&&len>4){
+      const regPut=hist.map((_,i)=>null);
+      regPut[0]=hist[0].put_c;
+      regPut[len-1]=hist[len-1].put_c;
+      centChart.data.datasets[4].data=regPut;
+    }
+    centChart.update('active');
+  }
+
+  if(d.by_strike&&d.by_strike.length){
+    const bs=d.by_strike.filter(s=>s.cVol>0||s.pVol>0);
+    distChart.data.labels=bs.map(s=>s.strike.toFixed(0));
+    distChart.data.datasets[0].data=bs.map(s=>s.cVol);
+    distChart.data.datasets[1].data=bs.map(s=>s.pVol);
+    distChart.update('active');
+  }
+
+  // Tape regular update
+  if(cc&&pc){
+    const sp=cc-pc;
+    addTape(d.et_time||'--', `Call ${f0(cc)} | Put ${f0(pc)} | Spread ${sign(sp)}${f0(sp)} | ${dc}`,
+      dc.includes('UP')?'up':dc.includes('DOWN')?'dn':dc==='CHOP'?'neut':'acc');
+  }
+}
+
+// ── Trade guide generator (hedge fund quality logic) ─────────
+function getTradeGuide(dc, postLondon, cSlope, pSlope, conf, sr, spot){
+  const quality = postLondon ? '<span style="color:var(--call)">HIGH</span>' : '<span style="color:var(--gold)">LOW (pre-London)</span>';
+  let lines = [`Signal quality: ${quality}`,''];
+
+  if(!postLondon){
+    lines.push('<span style="color:var(--gold)">Wait for 11:30 ET</span>');
+    lines.push('Signals unreliable before London close');
+    return lines.join('<br>');
+  }
+
+  if(dc.includes('TREND UP')){
+    lines.push('<span style="color:var(--call)">TREND UP - BULLISH</span>');
+    lines.push('- Buy calls on dips to put centroid');
+    lines.push('- Target call centroid + OI wall');
+    lines.push('- Avoid put spreads');
+    if(sr) lines.push(`- Settle target: ${Math.round(sr.mid)}`);
+  } else if(dc.includes('TREND DOWN')){
+    lines.push('<span style="color:var(--put)">TREND DOWN - BEARISH</span>');
+    lines.push('- Buy puts on bounces to call centroid');
+    lines.push('- Target put centroid + OI support');
+    lines.push('- Avoid call spreads');
+    if(sr) lines.push(`- Settle target: ${Math.round(sr.mid)}`);
+  } else if(dc==='CHOP'){
+    lines.push('<span style="color:var(--gold)">CHOP DAY - RANGE</span>');
+    lines.push('- Sell spreads both sides');
+    lines.push('- Iron condors between centroids');
+    lines.push('- Butterflies at midpoint');
+    if(sr) lines.push(`- Range: ${Math.round(sr.low)}-${Math.round(sr.high)}`);
+    lines.push('- Step aside on directional');
+  } else if(dc==='SETTLING'){
+    lines.push('<span style="color:var(--acc)">SETTLING - BUTTERFLY</span>');
+    lines.push('- Near-zero ROC = range locked');
+    lines.push('- Butterfly at projected mid');
+    if(sr) lines.push(`- Target strike: ${Math.round(sr.mid)}`);
+    lines.push('- HIGH conf butterfly setup');
+  } else {
+    lines.push('<span style="color:var(--dimm)">DEVELOPING - WAIT</span>');
+    lines.push('- No clear structure yet');
+    lines.push('- Watch both centroids for alignment');
+    lines.push('- Re-check at 11:30 ET');
+  }
+  if(conf>70) lines.push(`<span style="color:var(--call)">Confidence: ${conf}% - TRADE</span>`);
+  else if(conf>40) lines.push(`<span style="color:var(--gold)">Confidence: ${conf}% - CAUTION</span>`);
+  else lines.push(`<span style="color:var(--dimm)">Confidence: ${conf}% - WAIT</span>`);
+  return lines.join('<br>');
+}
+
+// ── Alert banner ──────────────────────────────────────────────
+function fireAlert(dc, cls, signal){
+  document.querySelectorAll('.alert-banner').forEach(e=>e.remove());
+  const div=document.createElement('div');
+  div.className=`alert-banner ${cls}`;
+  div.innerHTML=`<div class="alert-pulse"></div><span>${dc} | ${signal}</span>`;
+  document.body.appendChild(div);
+  setTimeout(()=>div.remove(),5000);
+}
+
+function addTape(time,msg,cls){
+  const el=document.getElementById('tape');if(!el)return;
+  const row=document.createElement('div');row.className='ti';
+  const c=cls==='up'?'up':cls==='dn'?'dn':cls==='acc'?'acc':'neut';
+  row.innerHTML=`<span class="ti-time">${time} </span><span class="ti-v ${c}">${msg}</span>`;
+  el.insertBefore(row,el.firstChild);
+  if(el.children.length>80)el.removeChild(el.lastChild);
+}
+
+// ── Charts ────────────────────────────────────────────────────
+function initCharts(){
+  Chart.defaults.color='#2a5070';Chart.defaults.font.family="'Share Tech Mono',monospace";Chart.defaults.font.size=9;
+  const gc='rgba(14,48,80,.5)';
+  const tt={backgroundColor:'#06121e',borderColor:'#1a5580',borderWidth:1,
+    titleColor:'#00ccff',titleFont:{size:9},bodyFont:{size:9},bodyColor:'#b8ddf8',
+    callbacks:{label:ctx=>` ${ctx.dataset.label}: ${ctx.parsed.y?Math.round(ctx.parsed.y).toLocaleString():'--'}`}};
+
+  centChart=new Chart(document.getElementById('centChart'),{
+    type:'line',
+    data:{labels:[],datasets:[
+      {label:'Call Centroid',data:[],borderColor:'#00ff88',borderWidth:2.5,pointRadius:0,tension:.25,fill:false},
+      {label:'Put Centroid', data:[],borderColor:'#ff3355',borderWidth:2.5,pointRadius:0,tension:.25,fill:false},
+      {label:'SPX',          data:[],borderColor:'#cc55ff',borderWidth:1.5,pointRadius:0,tension:.2, fill:false},
+      {label:'Call Regress', data:[],borderColor:'rgba(0,255,136,.4)',borderWidth:1,borderDash:[6,4],pointRadius:0,tension:0,fill:false},
+      {label:'Put Regress',  data:[],borderColor:'rgba(255,51,85,.4)', borderWidth:1,borderDash:[6,4],pointRadius:0,tension:0,fill:false},
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,animation:{duration:300},
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:false},tooltip:tt},
+      scales:{
+        x:{grid:{color:gc,drawTicks:false},ticks:{maxTicksLimit:10,color:'#2a5070'}},
+        y:{position:'right',grid:{color:gc,drawTicks:false},
+           ticks:{color:'#3d6e8a',callback:v=>v.toLocaleString('en-US',{maximumFractionDigits:0})}}
+      }
+    }
+  });
+
+  distChart=new Chart(document.getElementById('distChart'),{
+    type:'bar',
+    data:{labels:[],datasets:[
+      {label:'Call Vol',data:[],backgroundColor:'rgba(0,255,136,.65)',borderRadius:1},
+      {label:'Put Vol', data:[],backgroundColor:'rgba(255,51,85,.65)', borderRadius:1},
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,animation:{duration:200},
+      plugins:{legend:{display:false},tooltip:{...tt,callbacks:{label:ctx=>` ${ctx.dataset.label}: ${fK(ctx.parsed.y)}`}}},
+      scales:{
+        x:{grid:{display:false},ticks:{maxTicksLimit:20,color:'#2a5070',font:{size:8}}},
+        y:{grid:{color:gc},ticks:{color:'#2a5070',callback:v=>fK(v)}}
+      }
+    }
+  });
+}
+
+boot();
+</script>
+</body>
+</html>
