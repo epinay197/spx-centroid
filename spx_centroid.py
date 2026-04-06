@@ -676,17 +676,12 @@ def get_chain_tastytrade(exp):
     dxfeed_syms = list(sym_map.keys())
     print(f"  [Tastytrade] Subscribing to {len(dxfeed_syms)} dxFeed symbols...")
 
-    # Batch in chunks to avoid overloading the WS
-    CHUNK = 200
-    all_data = {}
-    for start in range(0, len(dxfeed_syms), CHUNK):
-        chunk = dxfeed_syms[start:start + CHUNK]
-        chunk_data = _tt_collect_dxfeed(
-            symbols=chunk,
-            event_types=["Summary", "Trade"],
-            timeout_sec=20.0,
-        )
-        all_data.update(chunk_data)
+    # Single WS connection for all symbols (faster than chunking)
+    all_data = _tt_collect_dxfeed(
+        symbols=dxfeed_syms,
+        event_types=["Summary", "Trade"],
+        timeout_sec=15.0,
+    )
 
     options = []
     for dxfeed_sym, meta in sym_map.items():
