@@ -542,18 +542,19 @@ def _tt_collect_dxfeed(symbols, event_types, timeout_sec=25.0):
             break
         with collect_lock:
             has_data = len(collected) > 0
-        if has_data and (time.time() - last_data[0]) > 3.0:
+        if has_data and (time.time() - last_data[0]) > 1.5:
             break
     ws_app.close()
     t.join(timeout=3)
     return collected
 
+_TT_LAST_SPOT = [0.0]  # cached spot from last successful derivation
+
 def _tt_get_nested_chain(expiration):
     """
     Fetch option chain from /option-chains/SPX/nested REST API.
-    Returns (sym_map, spot_estimate) where sym_map is
-    dxfeed_symbol -> {strike, option_type, expiration}.
-    spot_estimate is derived from ATM strikes if available.
+    Filters to ±200 strikes from last known spot.
+    Returns sym_map: dxfeed_symbol -> {strike, option_type, expiration}.
     """
     access_token = _tt_get_access_token()
     resp = requests.get(
@@ -564,14 +565,25 @@ def _tt_get_nested_chain(expiration):
     resp.raise_for_status()
     items = resp.json().get("data", {}).get("items", [])
 
+    # Use cached spot or middle of strikes for filtering
+    spot_est = _TT_LAST_SPOT[0] if _TT_LAST_SPOT[0] > 100 else 0
+    strike_range = 200
+
     sym_map = {}
     for chain in items:
         for exp in chain.get("expirations", []):
             if exp.get("expiration-date") != expiration:
                 continue
-            for s in exp.get("strikes", []):
+            all_strikes_raw = exp.get("strikes", [])
+            # If no cached spot, use middle strike as estimate
+            if spot_est == 0 and all_strikes_raw:
+                mid = all_strikes_raw[len(all_strikes_raw)//2]
+                spot_est = float(mid.get("strike-price", 0))
+            for s in all_strikes_raw:
                 strike = float(s.get("strike-price", 0))
                 if strike <= 0:
+                    continue
+                if spot_est > 0 and abs(strike - spot_est) > strike_range:
                     continue
                 call_sym = s.get("call-streamer-symbol")
                 put_sym  = s.get("put-streamer-symbol")
@@ -585,60 +597,45 @@ def _tt_get_nested_chain(expiration):
 
 def get_spot_tastytrade():
     """Derive SPX spot from 0DTE option chain put-call parity.
-    For a given strike K: spot ≈ K + call_mid - put_mid."""
+    Uses a single ATM pair for speed."""
     access_token = _tt_get_access_token()
     resp = requests.get(
         f"{TT_BASE_URL}/option-chains/SPX/nested",
         headers={"Authorization": f"Bearer {access_token}"},
-        timeout=20,
+        timeout=15,
     )
     resp.raise_for_status()
     items = resp.json().get("data", {}).get("items", [])
     td = date.today().isoformat()
-    # Collect call+put streamer symbols for middle strikes
-    pairs = []  # [(strike, call_sym, put_sym)]
     for chain in items:
         for exp in chain.get("expirations", []):
             if exp.get("expiration-date") != td:
                 continue
             strikes = exp.get("strikes", [])
             mid_idx = len(strikes) // 2
-            # Take 3 strikes around the middle
-            for s in strikes[max(0,mid_idx-1):mid_idx+2]:
+            # Try single ATM pair
+            for s in strikes[mid_idx:mid_idx+2]:
                 k = float(s.get("strike-price", 0))
                 cs = s.get("call-streamer-symbol")
                 ps = s.get("put-streamer-symbol")
                 if k > 0 and cs and ps:
-                    pairs.append((k, cs, ps))
+                    data = _tt_collect_dxfeed([cs, ps], ["Quote"], timeout_sec=6.0)
+                    cev, pev = data.get(cs, {}), data.get(ps, {})
+                    cb = float(cev.get("bidPrice") or 0)
+                    ca = float(cev.get("askPrice") or 0)
+                    pb = float(pev.get("bidPrice") or 0)
+                    pa = float(pev.get("askPrice") or 0)
+                    if cb > 0 and ca > 0 and (pb > 0 or pa > 0):
+                        cmid = (cb + ca) / 2
+                        pmid = (pb + pa) / 2 if pb > 0 and pa > 0 else max(pb, pa)
+                        spot = round(k + cmid - pmid, 2)
+                        if spot > 100:
+                            _TT_LAST_SPOT[0] = spot
+                            print(f"  [Tastytrade] SPX spot: {spot}")
+                            return spot
             break
-        if pairs: break
-    if not pairs:
-        raise RuntimeError("[Tastytrade] No ATM pairs for spot derivation")
-    # Subscribe to Quote for these pairs
-    all_syms = []
-    for k, cs, ps in pairs:
-        all_syms.extend([cs, ps])
-    data = _tt_collect_dxfeed(symbols=all_syms, event_types=["Quote"], timeout_sec=10.0)
-    # Derive spot from each pair using put-call parity
-    estimates = []
-    for k, cs, ps in pairs:
-        cev = data.get(cs, {})
-        pev = data.get(ps, {})
-        cbid = float(cev.get("bidPrice") or 0)
-        cask = float(cev.get("askPrice") or 0)
-        pbid = float(pev.get("bidPrice") or 0)
-        pask = float(pev.get("askPrice") or 0)
-        if cbid > 0 and cask > 0 and pbid > 0 and pask > 0:
-            cmid = (cbid + cask) / 2
-            pmid = (pbid + pask) / 2
-            est = k + cmid - pmid
-            if est > 100:
-                estimates.append(est)
-    if estimates:
-        spot = round(sum(estimates) / len(estimates), 2)
-        print(f"  [Tastytrade] SPX spot (put-call parity): {spot}")
-        return spot
-    raise RuntimeError("[Tastytrade] Could not derive SPX spot from options")
+        break
+    raise RuntimeError("[Tastytrade] Could not derive SPX spot")
 
 def get_0dte_exp_tastytrade():
     """Get today's 0DTE expiration via Tastytrade nested chain."""
@@ -843,16 +840,56 @@ def refresh_data():
         if not tradier_ok or not opts:
             if G_USE_TASTYTRADE:
                 source = "Tastytrade"
-                print("  Falling back to Tastytrade API...")
                 try:
-                    if spot is None:
-                        spot = get_spot_tastytrade()
                     if exp is None:
                         exp = get_0dte_exp_tastytrade()
-                    opts = get_chain_tastytrade(exp)
+                    # Get spot + chain in combined flow (single REST + single WS)
+                    sym_map = _tt_get_nested_chain(exp)
+                    if sym_map:
+                        # Spot: derive from ATM pair quotes
+                        all_strikes = sorted(set(m["strike"] for m in sym_map.values()))
+                        mid_k = all_strikes[len(all_strikes)//2]
+                        spot_syms = [s for s,m in sym_map.items()
+                                     if abs(m["strike"] - mid_k) < 10][:2]
+                        # Fetch chain + spot quotes in one WS connection
+                        all_syms = list(sym_map.keys()) + spot_syms
+                        all_data = _tt_collect_dxfeed(
+                            all_syms, ["Summary", "Trade", "Quote"],
+                            timeout_sec=6.0)
+                        # Derive spot from ATM Quote data
+                        if spot is None:
+                            for s, m in sym_map.items():
+                                if abs(m["strike"] - mid_k) > 5:
+                                    continue
+                                ev = all_data.get(s, {})
+                                bid = float(ev.get("bidPrice") or 0)
+                                ask = float(ev.get("askPrice") or 0)
+                                if bid > 0 and ask > 0:
+                                    mid = (bid + ask) / 2
+                                    if m["option_type"] == "C":
+                                        spot = round(m["strike"] + mid, 2)
+                                    else:
+                                        spot = round(m["strike"] - mid, 2)
+                                    _TT_LAST_SPOT[0] = spot
+                                    break
+                        # Build opts from collected data
+                        def _si(v):
+                            try:
+                                f=float(v); return int(f) if f==f else 0
+                            except: return 0
+                        opts = []
+                        for dxs, meta in sym_map.items():
+                            ev = all_data.get(dxs, {})
+                            opts.append({
+                                "strike": meta["strike"],
+                                "option_type": "call" if meta["option_type"]=="C" else "put",
+                                "volume": _si(ev.get("dayVolume") or ev.get("volume") or 0),
+                                "open_interest": _si(ev.get("openInterest") or 0),
+                            })
+                        print(f"  [Tastytrade] {len(opts)} contracts, spot={spot}")
                 except Exception as tte:
                     print(f"  [Tastytrade failed] {tte}")
-                    opts = None  # fall through to Massive
+                    opts = None
 
         # Fallback to Massive (third source)
         if not opts:
