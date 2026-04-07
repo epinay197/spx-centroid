@@ -1,31 +1,41 @@
-# Credentials — NEVER commit these
-credentials.env
-token.txt
-*.env
-.env
-.env.*
-
-# Python artifacts
+# Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
 *.egg-info/
 dist/
 build/
 
-# Virtual environments
-venv/
-.venv/
-env/
-ENV/
-
-# IDEs
+# IDE
 .vscode/
 .idea/
 *.swp
+*.swo
+
+# Environment & Credentials
+.env
+config.txt
+credentials.env
+*.json
+tasty_token.json
+
+# Claude cache
+.claude/
+
+# Backups & demos
+*.bak
+*.backup
+*_backup.py
+signal_demo.html
+spx_centroid_gh.py
+spx_centroid_v6_tradier_only.py.bak
+
+# OS
 .DS_Store
 Thumbs.db
-
-# Logs
 *.log
