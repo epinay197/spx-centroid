@@ -45,14 +45,10 @@ def _env(key, default=""):
     # 5. Default value
     return default
 
-# Tradier API Configuration
-TRADIER_TOKEN    = _env("TRADIER_TOKEN", "YOUR_TRADIER_API_TOKEN_HERE")
-TRADIER_BASE_URL = _env("TRADIER_BASE_URL", "https://api.tradier.com/v1")
-
-# Tastytrade OAuth (live data fallback)
-TT_CLIENT_ID      = _env("TASTYTRADE_CLIENT_ID")
-TT_CLIENT_SECRET  = _env("TASTYTRADE_CLIENT_SECRET")
-TT_REFRESH_TOKEN  = _env("TASTYTRADE_REFRESH_TOKEN")
+# Tastytrade OAuth (PRIMARY data source)
+TT_CLIENT_ID      = _env("TASTY_CLIENT_ID") or _env("TASTYTRADE_CLIENT_ID")
+TT_CLIENT_SECRET  = _env("TASTY_CLIENT_SECRET") or _env("TASTYTRADE_CLIENT_SECRET")
+TT_REFRESH_TOKEN  = _env("TASTY_REFRESH_TOKEN") or _env("TASTYTRADE_REFRESH_TOKEN")
 TT_API_BASE       = "https://api.tastytrade.com"
 TT_DXFEED_WS      = "wss://tasty-openapi-ws.dxfeed.com/realtime"
 

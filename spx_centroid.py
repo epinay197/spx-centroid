@@ -22,7 +22,7 @@ try:
 except ImportError:
     HAS_WEBSOCKET = False
 
-PORT      = 8765
+PORT      = 8052
 BASE_DIR  = Path(__file__).parent
 
 TRADIER_PROD    = "https://api.tradier.com/v1"
@@ -85,44 +85,32 @@ def load_credentials():
                 k, v = line.split("=", 1)
                 v = v.strip().strip('"').strip("'").strip()
                 if v: creds[k.strip()] = v
-    # Load Tastytrade credentials (second fallback)
-    tt_id     = creds.get("TASTYTRADE_CLIENT_ID", "")
-    tt_secret = creds.get("TASTYTRADE_CLIENT_SECRET", "")
-    tt_refresh = creds.get("TASTYTRADE_REFRESH_TOKEN", "")
+    # Load Tastytrade credentials (PRIMARY source)
+    tt_id     = creds.get("TASTY_CLIENT_ID", "") or creds.get("TT_CLIENT_ID", "")
+    tt_secret = creds.get("TASTY_CLIENT_SECRET", "") or creds.get("TT_CLIENT_SECRET", "")
+    tt_refresh = creds.get("TASTY_REFRESH_TOKEN", "") or creds.get("TT_REFRESH_TOKEN", "")
     if tt_id and tt_secret and tt_refresh:
         G_TT_CLIENT_ID     = tt_id
         G_TT_CLIENT_SECRET = tt_secret
         G_TT_REFRESH_TOKEN = tt_refresh
         G_USE_TASTYTRADE   = True
-        print("  Tastytrade OAuth credentials loaded (fallback ready)")
+        print("  Tastytrade OAuth credentials loaded (PRIMARY source)")
+        return None, None, "Tastytrade (PRIMARY)"
     elif (BASE_DIR / "tasty_token.json").exists():
-        # No OAuth creds but we have a cached token file — enable tastytrade mode
         G_USE_TASTYTRADE = True
         print("  Tastytrade token file found (tasty_token.json)")
-    # Load Massive API key (third fallback)
+        return None, None, "Tastytrade (PRIMARY)"
+
+    # Load Massive API key (fallback only)
     massive_key = creds.get("MASSIVE_API_KEY", "")
     if massive_key:
         G_MASSIVE_KEY = massive_key
         G_USE_MASSIVE = True
         print("  Massive API key loaded (fallback ready)")
-    prod    = creds.get("TRADIER_TOKEN_PRODUCTION","")
-    sandbox = creds.get("TRADIER_TOKEN_SANDBOX","")
-    generic = creds.get("TRADIER_TOKEN","")
-    candidates = []
-    if prod:    candidates.append((prod,    TRADIER_PROD,    "Production (live)"))
-    if sandbox: candidates.append((sandbox, TRADIER_SANDBOX, "Sandbox (15-min delay)"))
-    if generic:
-        candidates.append((generic, TRADIER_PROD,    "Production (live)"))
-        candidates.append((generic, TRADIER_SANDBOX, "Sandbox (15-min delay)"))
-    if not candidates:
-        if G_USE_TASTYTRADE:
-            print("  No Tradier token -- will use Tastytrade as primary")
-            return None, None, "Tastytrade (fallback)"
-        if G_USE_MASSIVE:
-            print("  No Tradier token -- will use Massive API only")
-            return None, None, "Massive (fallback)"
-        print("  ERROR: No Tradier token in credentials.env")
-        input("Press Enter to exit..."); exit(1)
+        return None, None, "Massive (fallback)"
+
+    print("  ERROR: No Tastytrade credentials found in credentials.env")
+    input("Press Enter to exit..."); exit(1)
     for token, base_url, label in candidates:
         print(f"  Testing {label}...")
         try:
@@ -820,24 +808,13 @@ def classify_day(history):
 # ── MAIN REFRESH ──────────────────────────────────────────────
 def refresh_data():
     try:
-        source = "Tradier"
-        tradier_ok = G_TOKEN is not None and G_BASE_URL is not None
+        source = "Tastytrade"
         spot = None
         exp  = None
         opts = None
 
-        # Try Tradier first
-        if tradier_ok:
-            try:
-                spot = get_spot()
-                exp  = get_0dte_exp()
-                opts = get_chain_0dte(exp)
-            except Exception as te:
-                print(f"  [Tradier failed] {te}")
-                tradier_ok = False
-
-        # Fallback to Tastytrade (second source)
-        if not tradier_ok or not opts:
+        # Use Tastytrade as PRIMARY source
+        if G_USE_TASTYTRADE:
             if G_USE_TASTYTRADE:
                 source = "Tastytrade"
                 try:
@@ -891,7 +868,7 @@ def refresh_data():
                     print(f"  [Tastytrade failed] {tte}")
                     opts = None
 
-        # Fallback to Massive (third source)
+        # Fallback to Massive (secondary source only)
         if not opts:
             if G_USE_MASSIVE:
                 source = "Massive"
@@ -903,9 +880,9 @@ def refresh_data():
                         exp = date.today().isoformat()
                     opts = get_chain_massive(exp)
                 except Exception as me:
-                    raise RuntimeError(f"All fallbacks failed. Massive: {me}")
-            elif not tradier_ok:
-                raise RuntimeError("Tradier failed and no fallback available")
+                    raise RuntimeError(f"All sources failed. Massive: {me}")
+            else:
+                raise RuntimeError("Tastytrade failed and no fallback available")
 
         if spot is None or opts is None:
             raise RuntimeError("No data source returned valid data")
@@ -1055,7 +1032,10 @@ def main():
     # Open browser right away - it shows boot screen while data loads
     url = f"http://localhost:{PORT}"
     print(f"  Browser -> {url}\n  Ctrl+C to stop\n")
-    webbrowser.open(url)
+    try:
+        webbrowser.open(url)
+    except:
+        pass  # Silent fail if browser can't open (headless/automated environments)
 
     # Start data fetch in background (after browser is open)
     threading.Thread(target=data_loop, daemon=True).start()
